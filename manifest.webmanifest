@@ -1,0 +1,20 @@
+{
+  "name": "YARD ZERO",
+  "short_name": "YARD ZERO",
+  "description": "컨테이너 야드와 창고에서 웨이브로 몰려오는 적을 막는 모바일 3D FPS",
+  "lang": "ko",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "landscape",
+  "background_color": "#090b0c",
+  "theme_color": "#090b0c",
+  "categories": ["games"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

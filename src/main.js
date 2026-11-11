@@ -10,7 +10,7 @@ import { initSoldierAssets, PuppetBody } from './soldier.js';
 import { MOCAP, loadMocap, MocapBody } from './mocap.js';
 import { buildViewmodel } from './viewmodel.js';
 
-const VERSION = 'v0.4';
+const VERSION = 'v0.5';
 const UP = new THREE.Vector3(0, 1, 0);
 const _f = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _d = new THREE.Vector3(), _v = new THREE.Vector3(), _w = new THREE.Vector3(), _m = new THREE.Vector3(), _mz = new THREE.Vector3();
 const ZAXIS = new THREE.Vector3(0, 0, 1);

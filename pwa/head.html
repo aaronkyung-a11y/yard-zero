@@ -1,0 +1,40 @@
+<meta name="theme-color" content="#090b0c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="YARD ZERO">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<script>
+// PWA: 서비스 워커 등록, 설치 버튼(Android·데스크톱 Chrome), iOS 설치 안내
+(function () {
+  var ok = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if (ok && 'serviceWorker' in navigator) window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+  var mm = window.matchMedia ? function (q) { return matchMedia(q).matches; } : function () { return false; };
+  var standalone = mm('(display-mode: standalone)') || mm('(display-mode: fullscreen)') || navigator.standalone === true;
+  var deferred = null;
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    deferred = e;
+    var b = document.getElementById('btnInstall');
+    if (b) b.classList.remove('hidden');
+  });
+  window.addEventListener('appinstalled', function () {
+    deferred = null;
+    var b = document.getElementById('btnInstall');
+    if (b) b.classList.add('hidden');
+  });
+  document.addEventListener('DOMContentLoaded', function () {
+    var b = document.getElementById('btnInstall'), h = document.getElementById('iosHint');
+    if (b) b.addEventListener('click', function () {
+      if (!deferred) return;
+      deferred.prompt();
+      deferred.userChoice.then(function () { deferred = null; b.classList.add('hidden'); });
+    });
+    var ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (h && ios && !standalone) h.classList.remove('hidden');
+    if (standalone) document.documentElement.classList.add('standalone');
+  });
+})();
+</script>
