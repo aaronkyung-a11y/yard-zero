@@ -1,0 +1,32 @@
+import { chromium } from '/opt/npm-tools/node_modules/playwright/index.mjs';
+import { pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
+const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
+const ctx = await browser.newContext({ viewport: { width: 844, height: 390 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true });
+const page = await ctx.newPage();
+const errors = [];
+page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+page.on('pageerror', (e) => errors.push('[pageerror] ' + e.message + '\n' + (e.stack || '')));
+await page.route('**/*', (r) => (r.request().url().startsWith('file:') ? r.continue() : r.abort()));
+await page.goto(pathToFileURL(resolve(process.argv[2] || 'dist/index.html')).href);
+await page.waitForFunction(() => window.__yz && (window.__yz.MOCAP.ready || window.__yz.MOCAP.failed), null, { timeout: 60000 });
+const wait = (ms) => page.waitForTimeout(ms);
+const ev = (fn, arg) => page.evaluate(fn, arg);
+const gwait = (sec) => ev((s) => new Promise((res) => { const y = window.__yz, t0 = y.game.time; const f = () => (y.game.time - t0 >= s ? res() : requestAnimationFrame(f)); f(); }), sec);
+await wait(800);
+await page.screenshot({ path: 'test/50-menu.png' });
+await ev(() => { window.__yz.dbg.noDyn = true; document.getElementById('btnStart').click(); });
+await wait(800);
+// 교전 장면: 적 3명이 접근·사격 중인 순간 (플레이어 무적)
+await ev(() => {
+  const y = window.__yz; y.game.between = 9999; y.player.hp = 1e9; y.input.lastTouch = true;
+  y.player.pos.set(-5, 0, 24); y.player.yaw = 0.25; y.player.pitch = -0.02;
+  y.spawnEnemy(-9, 12); y.spawnEnemy(-6.5, 9.5); y.spawnEnemy(-3, 14.5);
+});
+await gwait(2.2);
+await ev(() => { const y = window.__yz; const e = y.enemies.filter((e) => !e.dead).sort((a, b) => a.pos.distanceTo(y.player.pos) - b.pos.distanceTo(y.player.pos))[0]; if (e) { const c = y.camera.position, dx = e.pos.x - c.x, dz = e.pos.z - c.z; y.player.yaw = Math.atan2(-dx, -dz) + 0.02; y.player.pitch = Math.atan2(1.3 - c.y, Math.hypot(dx, dz)); } });
+await gwait(0.5);
+await page.screenshot({ path: 'test/51-combat.png' });
+console.log(JSON.stringify(await ev(() => { const y = window.__yz; return { auto: y.vm.autoFiring, ammo: y.W.ar.ammo, hits: y.game.hits, kills: y.game.kills, lock: document.getElementById('ch').className, enemies: y.enemies.map((e) => ({ s: e.state, d: +e.pos.distanceTo(y.player.pos).toFixed(1), cr: +e.crouch.toFixed(1), back: e.back, dead: e.dead })) }; })));
+console.log(errors.length ? 'ERRORS:\n' + [...new Set(errors)].join('\n') : 'no errors');
+await browser.close();

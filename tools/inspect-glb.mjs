@@ -1,0 +1,17 @@
+import { readFileSync } from 'node:fs';
+const buf = readFileSync(process.argv[2]);
+const jsonLen = buf.readUInt32LE(12);
+const json = JSON.parse(buf.slice(20, 20 + jsonLen).toString('utf8'));
+const binStart = 20 + jsonLen + 8;
+console.log('asset', json.asset, 'binLen', buf.readUInt32LE(20 + jsonLen));
+console.log('scenes', JSON.stringify(json.scenes), 'scene', json.scene);
+console.log('nodes', json.nodes.length, 'skins', json.skins?.length, 'joints', json.skins?.[0].joints.length);
+json.nodes.forEach((n, i) => { if (!json.skins[0].joints.includes(i)) console.log(' node', i, n.name, JSON.stringify({ t: n.translation, r: n.rotation, s: n.scale, mesh: n.mesh, skin: n.skin, ch: n.children })); });
+console.log('joints:', json.skins[0].joints.map((j) => json.nodes[j].name).join(', '));
+console.log('meshes', JSON.stringify(json.meshes.map((m) => ({ name: m.name, prims: m.primitives.map((p) => ({ attrs: Object.keys(p.attributes), mat: p.material, verts: json.accessors[p.attributes.POSITION].count, idx: json.accessors[p.indices]?.count, min: json.accessors[p.attributes.POSITION].min, max: json.accessors[p.attributes.POSITION].max })) }))));
+console.log('materials', JSON.stringify(json.materials));
+console.log('textures', JSON.stringify(json.textures), 'samplers', JSON.stringify(json.samplers));
+console.log('images', JSON.stringify(json.images?.map((im) => ({ ...im, bytes: json.bufferViews[im.bufferView]?.byteLength }))));
+console.log('animations', json.animations.map((a) => { const times = a.samplers.map((s) => json.accessors[s.input]); return { name: a.name, channels: a.channels.length, dur: Math.max(...times.map((t) => t.max[0])), keys: Math.max(...times.map((t) => t.count)), paths: [...new Set(a.channels.map((c) => c.target.path))] }; }));
+console.log('extensions', json.extensionsUsed, json.extensionsRequired);
+const hips = json.nodes.find((n) => /Hips/.test(n.name)); console.log('hips', JSON.stringify(hips));

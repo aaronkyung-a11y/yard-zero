@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>YARD ZERO</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;700&family=Saira+Stencil+One&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* 레이아웃: 전체 화면 3D 캔버스 위에 HUD를 네 모서리에 고정, 엄지 영역은 좌하단(이동)·우하단(사격) */
+  --ink:#ebe7dc; --dim:#a3a9a6; --amber:#ffb23a; --danger:#ff4a36;
+  --panel:rgba(14,16,17,.5); --line:rgba(235,231,220,.3); --scrim:#090b0c;
+  --display:'Saira Stencil One','Impact','Haettenschweiler','Arial Narrow Bold',sans-serif;
+  --body:'Saira Condensed','Arial Narrow','Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic',sans-serif;
+  --u:min(1vmin,5.4px);
+  --sl:env(safe-area-inset-left,0px); --sr:env(safe-area-inset-right,0px); --st:env(safe-area-inset-top,0px); --sb:env(safe-area-inset-bottom,0px);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--scrim);color:var(--ink);overflow:hidden;font-family:var(--body);
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;touch-action:none;overscroll-behavior:none}
+#root{position:fixed;left:0;top:0;width:100%;height:100%;overflow:hidden}
+/* 세로로 고정된 앱 안에서도 가로로 잡고 할 수 있도록 화면 전체를 90° 돌리는 모드 */
+body.rot #root{transform-origin:0 0;transform:rotate(90deg) translateY(-100%)}
+body.rot{--sl:env(safe-area-inset-top,0px);--st:env(safe-area-inset-right,0px);--sr:env(safe-area-inset-bottom,0px);--sb:env(safe-area-inset-left,0px)}
+#c{position:absolute;inset:0;width:100%;height:100%;display:block}
+.hidden{display:none!important}
+#vig,#hurt{position:absolute;inset:0;pointer-events:none}
+#vig{background:radial-gradient(ellipse at center,transparent 54%,rgba(0,0,0,.4) 100%)}
+#hurt{opacity:0;background:radial-gradient(ellipse at center,rgba(160,0,0,0) 38%,rgba(175,12,0,.78) 100%)}
+
+/* ── HUD */
+#hud,#touch{position:absolute;inset:0}
+#hud{pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.7)}
+.lbl{font:500 clamp(10px,2.6vmin,13px)/1 var(--body);letter-spacing:.16em;color:var(--dim);text-transform:uppercase}
+#topL{position:absolute;left:calc(14px + var(--sl));top:calc(11px + var(--st));display:flex;align-items:center;gap:8px}
+#hpBar{width:clamp(88px,26vmin,170px);height:clamp(6px,1.8vmin,9px);background:rgba(0,0,0,.5);outline:1px solid var(--line);position:relative}
+#hpFill{position:absolute;inset:0;background:var(--ink);transform-origin:left center}
+#hpFill.low{background:var(--danger)}
+#hpNum{font:700 clamp(16px,4.8vmin,24px)/1 var(--body);font-variant-numeric:tabular-nums;min-width:2.2ch}
+#topC{position:absolute;left:50%;top:calc(11px + var(--st));transform:translateX(-50%);display:flex;gap:12px;align-items:baseline;white-space:nowrap}
+#waveTxt{font:700 clamp(15px,4.4vmin,22px)/1 var(--body);letter-spacing:.08em}
+#enemyTxt{font:500 clamp(12px,3.4vmin,16px)/1 var(--body);color:var(--dim)}
+#topR{position:absolute;right:calc(66px + var(--sr));top:calc(9px + var(--st));text-align:right;display:flex;flex-direction:column;gap:3px;align-items:flex-end}
+#scoreTxt{font:700 clamp(16px,4.8vmin,24px)/1 var(--body);font-variant-numeric:tabular-nums}
+#feed{position:absolute;right:calc(14px + var(--sr));top:calc(64px + var(--st));display:flex;flex-direction:column;gap:4px;align-items:flex-end}
+#feed span{font:700 clamp(12px,3.4vmin,16px)/1 var(--body);letter-spacing:.04em;animation:feed 2.2s ease-out forwards}
+#feed span.hs{color:var(--amber)}
+@keyframes feed{0%{opacity:0;transform:translateX(10px)}12%{opacity:1;transform:none}75%{opacity:1}100%{opacity:0}}
+#msg{position:absolute;left:0;right:0;top:19%;text-align:center;opacity:0;transition:opacity .35s}
+#msg.show{opacity:1}
+#msgT{margin:0;font:400 clamp(26px,9vmin,54px)/1 var(--display);letter-spacing:.06em}
+#msgS{margin:6px 0 0;font:500 clamp(12px,3.6vmin,17px)/1.2 var(--body);letter-spacing:.1em;color:var(--dim)}
+#ch,#hm,#dmgs{position:absolute;left:50%;top:50%}
+#ch{--g:10px}
+#ch i{position:absolute;background:var(--ink);box-shadow:0 0 2px rgba(0,0,0,.85)}
+#ch .t,#ch .b{width:2px;height:9px;left:-1px}
+#ch .l,#ch .r{height:2px;width:9px;top:-1px}
+#ch .t{top:calc(-9px - var(--g))} #ch .b{top:var(--g)} #ch .l{left:calc(-9px - var(--g))} #ch .r{left:var(--g)}
+#ch .d{width:2px;height:2px;left:-1px;top:-1px}
+#ch.lock i{background:var(--amber)}
+#scope{position:absolute;inset:0;background:radial-gradient(circle at 50% 50%,transparent 0,transparent 33vmin,rgba(0,0,0,.97) 33.6vmin)}
+#scope i{position:absolute;background:#0c0c0c}
+#scope .h{left:calc(50% - 33vmin);right:calc(50% - 33vmin);top:50%;height:1.5px;margin-top:-.75px}
+#scope .v{top:calc(50% - 33vmin);bottom:calc(50% - 33vmin);left:50%;width:1.5px;margin-left:-.75px}
+#scope .c{left:50%;top:50%;width:4px;height:4px;margin:-2px 0 0 -2px;border-radius:50%;background:#d41b0c}
+#hm{opacity:0}
+#hm i{position:absolute;width:2px;height:10px;left:-1px;top:-5px;background:#fff;box-shadow:0 0 3px #000}
+#hm i:nth-child(1){transform:rotate(45deg) translateY(-13px)}
+#hm i:nth-child(2){transform:rotate(135deg) translateY(-13px)}
+#hm i:nth-child(3){transform:rotate(225deg) translateY(-13px)}
+#hm i:nth-child(4){transform:rotate(315deg) translateY(-13px)}
+#hm.kill i{background:var(--danger);height:13px}
+#dmgs i{position:absolute;left:-29vmin;top:-29vmin;width:58vmin;height:58vmin;border-radius:50%;opacity:0;
+  background:conic-gradient(from -24deg,rgba(255,58,36,0),rgba(255,58,36,.9) 24deg,rgba(255,58,36,0) 48deg,transparent 48deg);
+  -webkit-mask:radial-gradient(circle,transparent 61%,#000 62%,#000 69%,transparent 70%);mask:radial-gradient(circle,transparent 61%,#000 62%,#000 69%,transparent 70%)}
+#rl{position:absolute;left:50%;top:calc(50% + 34px);width:64px;height:3px;margin-left:-32px;background:rgba(0,0,0,.5);opacity:0}
+#rlFill{display:block;height:100%;width:100%;background:var(--amber);transform-origin:left center}
+#hint{position:absolute;left:50%;top:calc(50% + 46px);transform:translateX(-50%);font:700 clamp(11px,3.2vmin,15px)/1 var(--body);letter-spacing:.14em;color:var(--amber);opacity:0;white-space:nowrap}
+
+/* ── 터치 조작 */
+#touch{touch-action:none}
+.btn{position:absolute;width:calc(var(--s)*var(--u));height:calc(var(--s)*var(--u));border-radius:50%;background:var(--panel);border:1.5px solid var(--line);
+  display:grid;place-items:center;color:var(--ink)}
+.btn svg{width:46%;height:46%;pointer-events:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.btn.on{background:rgba(255,178,58,.3);border-color:var(--amber);color:var(--amber)}
+#bFire{--s:22;right:calc(5*var(--u) + var(--sr));bottom:calc(13*var(--u) + var(--sb));border-width:2px}
+#bFire svg{width:50%;height:50%}
+#bAds{--s:15;right:calc(31*var(--u) + var(--sr));bottom:calc(6*var(--u) + var(--sb))}
+#bJump{--s:12;right:calc(31*var(--u) + var(--sr));bottom:calc(25*var(--u) + var(--sb))}
+#bReload{--s:13;right:calc(8*var(--u) + var(--sr));bottom:calc(39*var(--u) + var(--sb))}
+#bCrouch{--s:12;right:calc(49*var(--u) + var(--sr));bottom:calc(5*var(--u) + var(--sb))}
+#bGren{--s:12;right:calc(23*var(--u) + var(--sr));bottom:calc(40*var(--u) + var(--sb))}
+.btn b{position:absolute;right:6%;top:0;font:700 clamp(10px,3vmin,14px)/1 var(--body);color:var(--amber);pointer-events:none}
+body.mouse .btn,body.mouse #joy{display:none}
+#joy{position:absolute;left:calc(9*var(--u) + var(--sl));bottom:calc(10*var(--u) + var(--sb));width:calc(27*var(--u));height:calc(27*var(--u));border-radius:50%;
+  border:1.5px solid var(--line);background:rgba(14,16,17,.22);opacity:.55;pointer-events:none}
+#joy.act{opacity:1}
+#knob{position:absolute;left:50%;top:50%;width:44%;height:44%;margin:-22% 0 0 -22%;border-radius:50%;background:rgba(235,231,220,.32);border:1.5px solid var(--line)}
+#joy.run #knob{background:rgba(255,178,58,.5);border-color:var(--amber)}
+#ammo{position:absolute;left:50%;bottom:calc(10px + var(--sb));transform:translateX(-50%);display:flex;align-items:baseline;gap:8px;padding:6px 12px 5px;
+  background:var(--panel);border:1px solid var(--line);border-radius:3px;white-space:nowrap}
+#ammoN{font:700 clamp(22px,7vmin,34px)/1 var(--body);font-variant-numeric:tabular-nums;min-width:2ch;text-align:right}
+#ammoN.low{color:var(--danger)}
+#ammoR{font:500 clamp(13px,3.8vmin,18px)/1 var(--body);color:var(--dim);font-variant-numeric:tabular-nums}
+#wName{font:500 clamp(11px,3vmin,14px)/1 var(--body);letter-spacing:.1em;color:var(--dim);font-style:normal;padding-left:8px;border-left:1px solid var(--line)}
+#bPause{position:absolute;right:calc(12px + var(--sr));top:calc(8px + var(--st));width:42px;height:42px;border-radius:3px;background:var(--panel);border:1px solid var(--line);
+  color:var(--ink);display:grid;place-items:center;padding:0;cursor:pointer}
+#bPause svg{width:16px;height:16px;fill:currentColor}
+
+/* ── 메뉴 */
+.overlay{position:absolute;inset:0;overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y;
+  padding:calc(18px + var(--st)) calc(22px + var(--sr)) calc(18px + var(--sb)) calc(22px + var(--sl));
+  background:linear-gradient(100deg,rgba(9,11,12,.92) 0%,rgba(9,11,12,.7) 48%,rgba(9,11,12,.18) 100%);display:flex}
+.wrap{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:clamp(14px,4vmin,48px);align-items:end;max-width:980px;width:100%;margin:auto 0}
+.eyebrow{font:500 clamp(11px,2.8vmin,14px)/1 var(--body);letter-spacing:.24em;color:var(--dim);margin:0 0 10px}
+h1{margin:0;font:400 clamp(46px,16vmin,124px)/.84 var(--display);letter-spacing:.015em;text-wrap:balance}
+.tag{margin:14px 0 0;font:500 clamp(14px,3.8vmin,19px)/1.4 var(--body);max-width:30ch;color:var(--ink)}
+.row{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin-top:18px}
+button{font-family:var(--body);-webkit-appearance:none;appearance:none}
+.go{background:var(--amber);color:#17130a;border:0;border-radius:2px;font:700 clamp(16px,4.6vmin,22px)/1 var(--body);letter-spacing:.08em;padding:.72em 1.5em;cursor:pointer}
+.go:active{transform:translateY(1px)}
+.ghost{background:transparent;color:var(--ink);border:1px solid var(--line);border-radius:2px;font:500 clamp(13px,3.6vmin,17px)/1 var(--body);letter-spacing:.06em;padding:.7em 1em;cursor:pointer}
+.ghost b{color:var(--amber);font-weight:700}
+button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.best{font:500 clamp(13px,3.4vmin,16px)/1 var(--body);color:var(--dim);letter-spacing:.06em}
+.best b{color:var(--ink);font-variant-numeric:tabular-nums}
+dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:7px 14px;font:500 clamp(12px,3.3vmin,15px)/1.25 var(--body)}
+dt{color:var(--amber);letter-spacing:.06em;white-space:nowrap}
+dd{margin:0;color:var(--ink)}
+.foot{margin-top:14px;font:500 clamp(10px,2.6vmin,12px)/1.3 var(--body);letter-spacing:.14em;color:var(--dim)}
+body.touch .kb,body.mouse .tc{display:none}
+h2{margin:0;font:400 clamp(32px,11vmin,72px)/.9 var(--display);letter-spacing:.03em}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:12px 18px;margin-top:16px;max-width:520px}
+.stats div{display:flex;flex-direction:column;gap:5px}
+.stats b{font:700 clamp(20px,6vmin,30px)/1 var(--body);font-variant-numeric:tabular-nums}
+.swrap{max-width:980px;width:100%;margin:auto 0}
+#supply{background:linear-gradient(180deg,rgba(9,11,12,.86) 0%,rgba(9,11,12,.74) 100%)}
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:16px}
+.card{display:flex;flex-direction:column;gap:8px;text-align:left;background:rgba(18,21,23,.82);color:var(--ink);border:1px solid var(--line);border-radius:3px;padding:14px 14px 16px;cursor:pointer;min-height:92px}
+.card:active{border-color:var(--amber);transform:translateY(1px)}
+.card .sl{font:500 clamp(10px,2.6vmin,12px)/1 var(--body);letter-spacing:.14em;color:var(--amber)}
+.card .st{font:700 clamp(16px,4.4vmin,22px)/1.1 var(--body)}
+.card .sd{font:500 clamp(12px,3.2vmin,15px)/1.3 var(--body);color:var(--dim)}
+body.portrait .cards{grid-template-columns:1fr}
+#err{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);font:500 16px/1.5 var(--body);text-align:center;padding:0 24px}
+body.portrait #topC{top:calc(42px + var(--st));left:calc(14px + var(--sl));transform:none}
+body.portrait #ammo{left:calc(14px + var(--sl));bottom:calc(44*var(--u) + var(--sb));transform:none}
+body.portrait #bCrouch{right:calc(31*var(--u) + var(--sr));bottom:calc(40*var(--u) + var(--sb))}
+body.portrait #bGren{right:calc(8*var(--u) + var(--sr));bottom:calc(55*var(--u) + var(--sb))}
+body.portrait .wrap{grid-template-columns:1fr;align-items:start}
+body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgba(9,11,12,.72) 60%,rgba(9,11,12,.45) 100%)}
+@media (prefers-reduced-motion:reduce){#feed span{animation-duration:.01s}#msg{transition:none}}
+</style>
+</head>
+<body class="mouse">
+<div id="root">
+<canvas id="c"></canvas>
+<div id="vig"></div>
+<div id="hurt"></div>
+
+<div id="hud" class="hidden">
+  <div id="scope" class="hidden"><i class="h"></i><i class="v"></i><i class="c"></i></div>
+  <div id="topL"><span class="lbl">HP</span><div id="hpBar"><i id="hpFill"></i></div><b id="hpNum">100</b></div>
+  <div id="topC"><span id="waveTxt">WAVE 1</span><span id="enemyTxt">적 4</span></div>
+  <div id="topR"><b id="scoreTxt">0</b><span class="lbl">점수</span></div>
+  <div id="feed"></div>
+  <div id="msg"><p id="msgT"></p><p id="msgS"></p></div>
+  <div id="ch"><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i><i class="d"></i></div>
+  <div id="hm"><i></i><i></i><i></i><i></i></div>
+  <div id="dmgs"><i></i><i></i><i></i><i></i></div>
+  <div id="rl"><i id="rlFill"></i></div>
+  <div id="hint"></div>
+</div>
+
+<div id="touch" class="hidden">
+  <div id="joy"><div id="knob"></div></div>
+  <div class="btn" id="bFire" data-btn="fire" aria-label="사격"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.5"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg></div>
+  <div class="btn" id="bAds" data-btn="ads" aria-label="정조준"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><path d="M12 3.5v4M12 16.5v4M3.5 12h4M16.5 12h4"/></svg></div>
+  <div class="btn" id="bJump" data-btn="jump" aria-label="점프"><svg viewBox="0 0 24 24"><path d="M5 14l7-7 7 7M5 20l7-7 7 7"/></svg></div>
+  <div class="btn" id="bReload" data-btn="reload" aria-label="재장전"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/></svg></div>
+  <div class="btn" id="bGren" data-btn="gren" aria-label="수류탄"><svg viewBox="0 0 24 24"><circle cx="12" cy="15" r="6"/><path d="M9.5 9V6h5v3M14.5 6h3.5v4"/></svg><b id="grenN">2</b></div>
+  <div class="btn" id="bCrouch" data-btn="crouch" aria-label="앉기"><svg viewBox="0 0 24 24"><path d="M5 10l7 7 7-7"/><path d="M5 20h14"/></svg></div>
+  <div id="ammo" data-btn="swap" aria-label="무기 교체"><b id="ammoN">30</b><span id="ammoR">/ 150</span><em id="wName">돌격소총</em></div>
+</div>
+<button id="bPause" class="hidden" aria-label="일시정지"><svg viewBox="0 0 16 16"><rect x="2.5" y="2" width="4" height="12"/><rect x="9.5" y="2" width="4" height="12"/></svg></button>
+
+<div id="menu" class="overlay">
+  <div class="wrap">
+    <div>
+      <p class="eyebrow">YZRU 261111 0 · 22G1</p>
+      <h1>YARD ZERO</h1>
+      <p class="tag">폐쇄된 컨테이너 야드. 웨이브마다 늘어나는 무장 병력을 엄폐물 사이에서 막아내세요.</p>
+      <div class="row">
+        <button class="go" id="btnStart">작전 시작</button>
+        <span class="best">최고 기록 <b id="bestTxt">0</b>점</span>
+      </div>
+      <div class="row">
+        <button class="ghost" id="btnQual">그래픽 <b>높음</b></button>
+        <button class="ghost" id="btnFull">전체 화면</button>
+        <button class="ghost" id="btnRot">가로로 돌려서 하기 <b>끔</b></button>
+      </div>
+      <div class="row">
+        <button class="ghost" id="btnSensDn0" aria-label="조준 감도 낮추기">감도 −</button>
+        <span class="best">조준 감도 <b id="sensTxt0">1.0</b></span>
+        <button class="ghost" id="btnSensUp0" aria-label="조준 감도 높이기">감도 +</button>
+        <button class="ghost" id="btnAuto">자동 사격 <b>켬</b></button>
+      </div>
+    </div>
+    <div>
+      <dl class="tc">
+        <dt>왼쪽 화면</dt><dd>끌어서 이동. 끝까지 밀면 질주</dd>
+        <dt>오른쪽 화면</dt><dd>끌어서 조준</dd>
+        <dt>자동 사격</dt><dd>조준선이 적에 닿으면 알아서 발사</dd>
+        <dt>사격 버튼</dt><dd>누른 채 끌면 쏘면서 조준</dd>
+        <dt>조준경 버튼</dt><dd>정조준 켜기와 끄기</dd>
+        <dt>탄약 표시</dt><dd>눌러서 가진 무기 교체</dd>
+        <dt>보급</dt><dd>웨이브를 막을 때마다 무기·강화 중 하나 선택</dd>
+        <dt>수류탄 버튼</dt><dd>던지고 2.6초 뒤 폭발</dd>
+      </dl>
+      <dl class="kb">
+        <dt>W A S D</dt><dd>이동. Shift 질주, C 앉기, Space 점프</dd>
+        <dt>마우스</dt><dd>조준. 왼쪽 사격, 오른쪽 정조준</dd>
+        <dt>R · Q · G</dt><dd>재장전 · 무기 교체(1~4 직접 선택) · 수류탄</dd>
+        <dt>Esc</dt><dd>일시정지</dd>
+      </dl>
+      <p class="foot" id="verTxt">v0.1</p>
+    </div>
+  </div>
+</div>
+
+<div id="pause" class="overlay hidden">
+  <div class="wrap">
+    <div>
+      <p class="eyebrow">작전 보류</p>
+      <h2>일시정지</h2>
+      <div class="row"><button class="go" id="btnResume">계속하기</button><button class="ghost" id="btnRestart">처음부터 다시</button></div>
+    </div>
+    <div>
+      <div class="row" style="margin-top:0">
+        <button class="ghost" id="btnSensDn" aria-label="조준 감도 낮추기">감도 −</button>
+        <span class="best">조준 감도 <b id="sensTxt">1.0</b></span>
+        <button class="ghost" id="btnSensUp" aria-label="조준 감도 높이기">감도 +</button>
+      </div>
+      <div class="row">
+        <button class="ghost" id="btnAuto2">자동 사격 <b>켬</b></button>
+        <button class="ghost" id="btnSound">소리 <b>켬</b></button>
+        <button class="ghost" id="btnQual2">그래픽 <b>높음</b></button>
+        <button class="ghost" id="btnFull2">전체 화면</button>
+        <button class="ghost" id="btnRot2">가로로 돌려서 하기 <b>끔</b></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="supply" class="overlay hidden">
+  <div class="swrap">
+    <p class="eyebrow">보급 선택</p>
+    <h2>하나를 고르세요</h2>
+    <p class="best" id="supplySub" style="margin-top:10px"></p>
+    <div class="cards">
+      <button class="card" id="sup0"><span class="sl"></span><b class="st"></b><span class="sd"></span></button>
+      <button class="card" id="sup1"><span class="sl"></span><b class="st"></b><span class="sd"></span></button>
+      <button class="card" id="sup2"><span class="sl"></span><b class="st"></b><span class="sd"></span></button>
+    </div>
+  </div>
+</div>
+
+<div id="over" class="overlay hidden">
+  <div class="wrap">
+    <div>
+      <p class="eyebrow" id="overEyebrow">전사</p>
+      <h2>작전 종료</h2>
+      <div class="stats">
+        <div><b id="oWave">1</b><span class="lbl">웨이브</span></div>
+        <div><b id="oScore">0</b><span class="lbl">점수</span></div>
+        <div><b id="oKills">0</b><span class="lbl">사살</span></div>
+        <div><b id="oHead">0</b><span class="lbl">헤드샷</span></div>
+        <div><b id="oAcc">0%</b><span class="lbl">명중률</span></div>
+      </div>
+      <div class="row"><button class="go" id="btnAgain">다시 도전</button></div>
+    </div>
+    <div></div>
+  </div>
+</div>
+
+</div>
+<p id="err" hidden>이 기기에서 3D 그래픽(WebGL)을 시작하지 못했습니다. 다른 브라우저에서 다시 열어 주세요.</p>
+<script>/*__BUNDLE__*/</script>
+</body>
+</html>

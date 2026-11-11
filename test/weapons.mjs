@@ -1,0 +1,56 @@
+// 산탄총 펌프·한 발씩 장전, 스코프, 수류탄 버튼 (실제 터치 이벤트)
+import { chromium } from '/opt/npm-tools/node_modules/playwright/index.mjs';
+import { pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
+const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
+const ctx = await browser.newContext({ viewport: { width: 560, height: 260 }, deviceScaleFactor: 1, hasTouch: true, isMobile: true });
+const page = await ctx.newPage();
+const errors = [];
+page.on('pageerror', (e) => errors.push('[pageerror] ' + e.message + '\n' + (e.stack || '')));
+await page.route('**/*', (r) => (r.request().url().startsWith('file:') ? r.continue() : r.abort()));
+await page.goto(pathToFileURL(resolve('dist/index.html')).href);
+await page.waitForFunction(() => window.__yz && (window.__yz.MOCAP.ready || window.__yz.MOCAP.failed), null, { timeout: 60000 });
+const ev = (fn, arg) => page.evaluate(fn, arg);
+const gw = (sec) => ev((s) => new Promise((res) => { const y = window.__yz, t0 = y.game.time; const f = () => (y.game.time - t0 >= s ? res() : requestAnimationFrame(f)); f(); }), sec);
+const cdp = await ctx.newCDPSession(page);
+const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([id, x, y]) => ({ id, x, y })) });
+await ev(() => { const y = window.__yz; y.opt.quality = 'low'; y.applyQuality(); y.dbg.noDyn = true; y.opt.autoFire = false; });
+await page.tap('#btnStart');
+await page.waitForTimeout(400);
+await ev(() => { const y = window.__yz; y.game.between = 9999; y.player.hp = 1e9; y.player.pitch = 0.2; y.prog.owned.shotgun = y.prog.owned.dmr = true; });
+const out = {};
+const fb = await ev(() => { const r = document.getElementById('bFire').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+const tapFire = async () => { await touch('touchStart', [[1, fb[0], fb[1]]]); await gw(0.08); await touch('touchEnd', []); };
+await page.tap('#ammo'); await gw(0.7);
+out.w1 = await ev(() => window.__yz.vm.cur);
+await touch('touchStart', [[1, fb[0], fb[1]]]);
+out.pumpTrace = await ev(() => new Promise((res) => { const y = window.__yz, t0 = y.game.time, tr = []; const f = () => { tr.push([+(y.game.time - t0).toFixed(2), +y.vm.pumpT.toFixed(2), +y.VM.shotgun.pump.position.z.toFixed(3)]); (y.game.time - t0 > 0.9 ? res(tr) : requestAnimationFrame(f)); }; f(); }));
+await touch('touchEnd', []);
+out.pumping = await ev(() => ({ pumpT: +window.__yz.vm.pumpT.toFixed(2), ammo: window.__yz.W.shotgun.ammo, pumpZ: +window.__yz.VM.shotgun.pump.position.z.toFixed(3) }));
+await tapFire(); await gw(0.2);
+out.tooFast = await ev(() => window.__yz.W.shotgun.ammo); // 펌프 중에는 발사 안 됨 → 5 유지
+await gw(0.8);
+for (let i = 0; i < 5; i++) { await tapFire(); await gw(1.0); }
+out.empty = await ev(() => ({ ammo: window.__yz.W.shotgun.ammo, reserve: window.__yz.W.shotgun.reserve }));
+await gw(1.6);
+out.midReload = await ev(() => ({ ammo: window.__yz.W.shotgun.ammo, reloading: window.__yz.vm.reloadT > 0 }));
+await tapFire(); await gw(0.5); // 장전 중 사격 → 장전 중단 후 발사
+out.interrupt = await ev(() => ({ ammo: window.__yz.W.shotgun.ammo, reloading: window.__yz.vm.reloadT > 0 }));
+await gw(6);
+out.full = await ev(() => ({ ammo: window.__yz.W.shotgun.ammo, reserve: window.__yz.W.shotgun.reserve }));
+await page.tap('#ammo'); await gw(0.7);
+out.w2 = await ev(() => window.__yz.vm.cur);
+await page.tap('#bAds'); await gw(0.6);
+out.scope = await ev(() => ({ overlay: !document.getElementById('scope').classList.contains('hidden'), rigHidden: !window.__yz.VM.rig.visible, fov: +window.__yz.camera.fov.toFixed(1) }));
+await page.screenshot({ path: 'test/w-scope.png' });
+await tapFire(); await gw(0.5);
+out.dmrAmmo = await ev(() => window.__yz.W.dmr.ammo);
+await page.tap('#bAds'); await gw(0.4);
+out.unscoped = await ev(() => ({ overlay: !document.getElementById('scope').classList.contains('hidden'), rigHidden: !window.__yz.VM.rig.visible }));
+await page.tap('#bGren'); await gw(0.3);
+out.gren = await ev(() => ({ n: window.__yz.gren.n, live: window.__yz.gren.list.length, badge: document.getElementById('grenN').textContent }));
+await gw(3);
+out.grenDone = await ev(() => window.__yz.gren.list.length);
+console.log(JSON.stringify(out));
+console.log(errors.length ? 'ERRORS:\n' + errors.join('\n') : 'no page errors');
+await browser.close();

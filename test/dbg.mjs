@@ -1,0 +1,14 @@
+import { chromium } from '/opt/npm-tools/node_modules/playwright/index.mjs';
+import { pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
+const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-sandbox'] });
+const page = await (await browser.newContext({ viewport: { width: 420, height: 220 } })).newPage();
+const errors = [];
+page.on('console', (m) => errors.push(`[${m.type()}] ${m.text()}`));
+page.on('pageerror', (e) => errors.push('[pageerror] ' + e.message));
+await page.goto(pathToFileURL(resolve('dist/index.html')).href);
+await page.waitForFunction(() => window.__yz && (window.__yz.MOCAP.ready || window.__yz.MOCAP.failed));
+await page.waitForTimeout(1500);
+console.log(JSON.stringify(await page.evaluate(() => { const m = window.__yz.MOCAP.mats[0]; const d = (t) => ({ complete: t.image.complete, w: t.image.naturalWidth, h: t.image.naturalHeight, version: t.version, src: t.image.src.slice(0, 40), cs: t.colorSpace }); let sk = null; window.__yz.MOCAP.scene.traverse((o) => { if (o.isSkinnedMesh && !sk) sk = { name: o.name, attrs: Object.keys(o.geometry.attributes), uv0: Array.from(o.geometry.attributes.uv.array.slice(0, 6)), mat: o.material.type }; }); return { map: d(m.map), nrm: d(m.normalMap), color: m.color.getHexString(), sk }; })));
+console.log(errors.slice(0, 10).join('\n'));
+await browser.close();
