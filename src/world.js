@@ -3,8 +3,9 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { mulberry32 } from './util.js';
 
-export const START = { x: 0, z: 27 };
-export const B = { x0: -42, x1: 66, z0: -32, z1: 32 }; // 전체 경계(야드 + 창고)
+export const START = { x: 0, z: 27, yaw: 0 }; // 현재 맵의 시작 지점 (맵을 바꾸면 값이 바뀐다)
+export const B = { x0: -42, x1: 66, z0: -32, z1: 32 }; // 현재 맵의 전체 경계 (맵을 바꾸면 값이 바뀐다)
+export const WORLD = { id: '', meshes: [], points: {} }; // 현재 맵: 이름, 장면에 올린 메시, 이름 붙은 지점
 const YB = { x0: -42, x1: 42, z0: -32, z1: 32 }; // 야드 담장 안쪽
 export const WH = { x0: 42.5, x1: 66, z0: -13, z1: 13, deckX: 48.5, deckY: 3.5, h: 7.6 }; // 창고 내부
 export const colliders = []; // {x0,y0,z0,x1,y1,z1,m}  m: 0 콘크리트, 1 금속, 2 목재
@@ -51,9 +52,17 @@ function barrierGeo(len) {
   return g;
 }
 
-export function buildWorld(scene, M) {
-  const r = mulberry32(4242);
-  const L = { concrete: [], container: [], steel: [], wood: [], glass: [], paint: [], puddle: [], marks: [], ao: [], floor: [], lamp: [], glow: [] };
+export const MAPS = { yard: '컨테이너 야드', dock: '부두', depot: '차량기지' };
+export function buildWorld(scene, M, mapId = 'yard') {
+  // 이전 맵 정리
+  for (const m of WORLD.meshes) { scene.remove(m); m.geometry.dispose(); }
+  WORLD.meshes.length = 0;
+  WORLD.id = mapId;
+  WORLD.points = {};
+  colliders.length = 0;
+  const r = mulberry32(mapId === 'yard' ? 4242 : mapId === 'dock' ? 7310 : 9157);
+  const L = { concrete: [], container: [], steel: [], wood: [], glass: [], paint: [], puddle: [], marks: [], ao: [], floor: [], lamp: [], glow: [], glowN: [], water: [] };
+  let PB = YB; // 무작위 엄폐물을 놓는 범위
   const foot = [];
   const put = (list, g, x, y, z, ry = 0, color = null) => {
     if (ry) g.rotateY(ry);
@@ -68,7 +77,7 @@ export function buildWorld(scene, M) {
   };
   const place = (w, d, margin) => {
     for (let i = 0; i < 60; i++) {
-      const x = YB.x0 + 3 + r() * (YB.x1 - YB.x0 - 6), z = YB.z0 + 3 + r() * (YB.z1 - YB.z0 - 6);
+      const x = PB.x0 + 3 + r() * (PB.x1 - PB.x0 - 6), z = PB.z0 + 3 + r() * (PB.z1 - PB.z0 - 6);
       if (Math.hypot(x - START.x, z - START.z) < 5.5) continue;
       if (freeRect(x - w / 2 - margin, z - d / 2 - margin, x + w / 2 + margin, z + d / 2 + margin)) {
         reserve(x - w / 2, z - d / 2, x + w / 2, z + d / 2);
@@ -78,17 +87,56 @@ export function buildWorld(scene, M) {
     return null;
   };
 
-  // ── 지면
-  const gg = new THREE.PlaneGeometry(700, 700);
-  gg.rotateX(-Math.PI / 2);
-  const guv = gg.attributes.uv;
-  for (let i = 0; i < guv.count; i++) guv.setXY(i, guv.getX(i) * 233, guv.getY(i) * 233);
-  const ground = new THREE.Mesh(gg, M.asphalt);
-  ground.receiveShadow = true;
-  scene.add(ground);
-
-  // ── 컨테이너
+  // ── 공용 도우미
+  const track = (m) => { scene.add(m); WORLD.meshes.push(m); return m; };
+  const groundRect = (x0, x1, z0, z1) => {
+    const w = x1 - x0, d = z1 - z0, gg = new THREE.PlaneGeometry(w, d);
+    gg.rotateX(-Math.PI / 2);
+    gg.translate((x0 + x1) / 2, 0, (z0 + z1) / 2);
+    const guv = gg.attributes.uv;
+    for (let i = 0; i < guv.count; i++) guv.setXY(i, (guv.getX(i) * w * 233) / 700, (guv.getY(i) * d * 233) / 700);
+    const ground = new THREE.Mesh(gg, M.asphalt);
+    ground.receiveShadow = true;
+    track(ground);
+  };
   const palette = [0x8c2f1f, 0x1f4e79, 0x2f6b3a, 0xb5651d, 0x8f918c, 0x7a1f2b, 0x1c6b6b, 0xcfcabb, 0xbd9a1c].map(C);
+  const crate = (x, z, s, y0 = 0) => {
+    put('wood', box(s, s, s, s), x, y0 + s / 2, z);
+    colBox(x, y0 + s / 2, z, s, s, s, 2);
+  };
+  const pallet = (x, z, n) => {
+    for (let k = 0; k < n; k++) {
+      put('wood', box(1.2, 0.14, 1.0, 1.2), x, 0.07 + k * 0.15, z);
+    }
+    colBox(x, n * 0.075, z, 1.2, n * 0.15, 1.0, 2);
+  };
+  const line = (x0, z0, x1, z1, w = 0.15) => {
+    const len = Math.hypot(x1 - x0, z1 - z0), g = new THREE.PlaneGeometry(len, w), uv = g.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setX(i, (uv.getX(i) * len) / 1.6);
+    g.rotateX(-Math.PI / 2);
+    g.rotateY(-Math.atan2(z1 - z0, x1 - x0));
+    g.translate((x0 + x1) / 2, 0.016, (z0 + z1) / 2);
+    L.paint.push(g);
+  };
+  // 등기구와 바닥 빛웅덩이. night=true면 밤 환경에서만 보이는 야외등
+  const lampAt = (x, y, z, pool = 0, baseY = 0, night = true) => {
+    const d = new THREE.BoxGeometry(0.5, 0.06, 0.5);
+    d.translate(x, y, z);
+    L.lamp.push(d);
+    if (pool) {
+      const g = new THREE.PlaneGeometry(pool, pool);
+      g.rotateX(-Math.PI / 2);
+      g.translate(x, baseY + 0.03, z);
+      L[night ? 'glowN' : 'glow'].push(g);
+    }
+  };
+
+  const layoutYard = () => {
+  Object.assign(B, { x0: -42, x1: 66, z0: -32, z1: 32 });
+  Object.assign(START, { x: 0, z: 27, yaw: 0 });
+  PB = YB;
+  groundRect(-350, 350, -350, 350);
+  // ── 컨테이너
   const layout = [
     [-30, -25, 0, 2], [-23.6, -25, 0, 1], [-11, -24, 1, 1], [-2, -21, 0, 2], [4.4, -21, 0, 1], [16, -25, 0, 1], [22.4, -25, 0, 2], [34, -21, 1, 1],
     [-35, -9, 1, 2], [-21, -12, 0, 1], [-14.6, -12, 0, 2], [0, -10, 1, 1], [12, -13, 0, 2], [18.4, -13, 0, 1], [31, -8, 1, 2],
@@ -158,16 +206,6 @@ export function buildWorld(scene, M) {
   put('steel', new THREE.BoxGeometry(14.2, 0.26, 0.18), -30, 4.5, 29.1, 0, colC);
   for (const x of [-36.6, -30, -23.4]) put('steel', new THREE.BoxGeometry(0.18, 0.26, 8.7), x, 4.5, 24.75, 0, colC);
   reserve(-37.5, 19.5, -22.5, 30);
-  const crate = (x, z, s, y0 = 0) => {
-    put('wood', box(s, s, s, s), x, y0 + s / 2, z);
-    colBox(x, y0 + s / 2, z, s, s, s, 2);
-  };
-  const pallet = (x, z, n) => {
-    for (let k = 0; k < n; k++) {
-      put('wood', box(1.2, 0.14, 1.0, 1.2), x, 0.07 + k * 0.15, z);
-    }
-    colBox(x, n * 0.075, z, 1.2, n * 0.15, 1.0, 2);
-  };
   crate(-33.4, 26.4, 1.2); crate(-32.1, 26.5, 1.0); crate(-33.3, 26.4, 1.0, 1.2);
   crate(-27.2, 22.6, 1.2); crate(-27.2, 23.9, 1.2);
   pallet(-30.2, 27.6, 4); pallet(-25, 27, 2);
@@ -209,6 +247,7 @@ export function buildWorld(scene, M) {
     const l = Math.hypot(dx, dz), ux = dx / l, uz = dz / l;
     put('steel', new THREE.BoxGeometry(Math.abs(ux) * 1.6 + 0.08, 0.08, Math.abs(uz) * 1.6 + 0.08), x + ux * 0.8, 8.95, z + uz * 0.8, 0, poleC);
     put('steel', new THREE.BoxGeometry(0.5, 0.12, 0.5), x + ux * 1.6, 8.9, z + uz * 1.6, 0, C(0xdedbd0));
+    lampAt(x + ux * 1.6, 8.82, z + uz * 1.6, 18);
     colBox(x, 4.5, z, 0.24, 9, 0.24, 1);
     reserve(x - 0.6, z - 0.6, x + 0.6, z + 0.6);
   }
@@ -270,14 +309,6 @@ export function buildWorld(scene, M) {
   }
 
   // ── 바닥 도색선
-  const line = (x0, z0, x1, z1, w = 0.15) => {
-    const len = Math.hypot(x1 - x0, z1 - z0), g = new THREE.PlaneGeometry(len, w), uv = g.attributes.uv;
-    for (let i = 0; i < uv.count; i++) uv.setX(i, (uv.getX(i) * len) / 1.6);
-    g.rotateX(-Math.PI / 2);
-    g.rotateY(-Math.atan2(z1 - z0, x1 - x0));
-    g.translate((x0 + x1) / 2, 0.016, (z0 + z1) / 2);
-    L.paint.push(g);
-  };
   for (const z of [-17.6, -17.2, 8.2, 8.6, 20]) line(-41, z, 41, z);
   for (const x of [-13.2, 9.4]) line(x, -31, x, 31);
   for (let x = -38; x <= 38; x += 6.6) line(x, 20, x, 23.2, 0.12);
@@ -441,6 +472,375 @@ export function buildWorld(scene, M) {
     }
   }
 
+  WORLD.points = { deck: { x: 45.5, y: 3.5, z: 0 }, canopy: { x: -30, z: 24.7 }, door: { x: 44.5, z: -8 } };
+  }; // layoutYard
+
+  // ── 새 맵용 부품
+  const wallC = (x0, z0, x1, z1, h = 3.2, t = 0.5) => { // 축에 나란한 담장 (중심선의 양 끝)
+    const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, w = Math.abs(x1 - x0) + t, d = Math.abs(z1 - z0) + t;
+    put('concrete', box(w, h, d, 3), cx, h / 2, cz);
+    colBox(cx, h / 2, cz, w, h, d, 0);
+  };
+  const markOn = (x, y, z, rot, side) => { // 컨테이너 옆면 표기
+    const g = new THREE.PlaneGeometry(2.3, 1.15), uv = g.attributes.uv, cell = (r() * 8) | 0, u0 = (cell % 4) / 4, v0 = 1 - (((cell / 4) | 0) + 1) / 2;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, u0 + uv.getX(i) * 0.25, v0 + uv.getY(i) * 0.5);
+    if (rot) { g.rotateY((side * Math.PI) / 2); g.translate(x + side * (CW / 2 + 0.022), y, z - side * (CL / 2 - 1.45)); }
+    else { if (side < 0) g.rotateY(Math.PI); g.translate(x + side * (CL / 2 - 1.45), y, z + side * (CW / 2 + 0.022)); }
+    L.marks.push(g);
+  };
+  const stackAt = (x, z, rot, stack) => { // 컨테이너 더미
+    const w = rot ? CW : CL, d = rot ? CL : CW;
+    for (let l = 0; l < stack; l++) {
+      const col = palette[(r() * palette.length) | 0].clone();
+      col.offsetHSL(0, 0, (r() - 0.5) * 0.05);
+      const y = CH / 2 + l * CH, pc = col.clone().multiplyScalar(0.62);
+      put('container', box(CL, CH, CW, 2.2, CH), x, y, z, rot ? Math.PI / 2 : 0, col);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) put('steel', new THREE.BoxGeometry(0.13, CH, 0.13), x + sx * (w / 2 - 0.05), y, z + sz * (d / 2 - 0.05), 0, pc);
+      for (const side of [-1, 1]) markOn(x, l * CH + CH - 0.78, z, rot, side);
+    }
+    addCol(x - w / 2, 0, z - d / 2, x + w / 2, stack * CH, z + d / 2, 1);
+    reserve(x - w / 2, z - d / 2, x + w / 2, z + d / 2);
+  };
+  const barC2 = [0x1d3f6e, 0x8a1c14, 0x4d5a2a, 0x2a2c2e].map(C);
+  const barrel = (x, z) => {
+    const c = barC2[(r() * barC2.length) | 0];
+    put('steel', new THREE.CylinderGeometry(0.29, 0.29, 0.88, 14), x, 0.44, z, 0, c);
+    put('steel', new THREE.CylinderGeometry(0.3, 0.3, 0.03, 14), x, 0.29, z, 0, c);
+    put('steel', new THREE.CylinderGeometry(0.3, 0.3, 0.03, 14), x, 0.6, z, 0, c);
+    colBox(x, 0.44, z, 0.56, 0.88, 0.56, 1);
+  };
+  const scatter = (nBarrier, nCrate, nBarrel, nPallet) => { // PB 범위 안에 무작위 엄폐물
+    for (let i = 0; i < nBarrier; i++) {
+      const rot = r() < 0.5, p = place(rot ? 0.6 : 2.4, rot ? 2.4 : 0.6, 1.6);
+      if (!p) continue;
+      put('concrete', barrierGeo(2.4), p.x, 0.425, p.z, rot ? Math.PI / 2 : 0);
+      colBox(p.x, 0.425, p.z, rot ? 0.6 : 2.4, 0.85, rot ? 2.4 : 0.6, 0);
+    }
+    for (let i = 0; i < nCrate; i++) {
+      const p = place(2.5, 1.3, 1.6);
+      if (!p) continue;
+      crate(p.x - 0.62, p.z, 1.2);
+      crate(p.x + 0.6, p.z + 0.05, 1.0);
+      if (r() < 0.45) crate(p.x - 0.6, p.z, 1.0, 1.2);
+    }
+    for (let i = 0; i < nBarrel; i++) {
+      const p = place(1.4, 1.4, 1.5);
+      if (!p) continue;
+      const n = 1 + ((r() * 3) | 0), offs = [[-0.32, -0.3], [0.33, -0.25], [0, 0.34]];
+      for (let k = 0; k < n; k++) barrel(p.x + offs[k][0], p.z + offs[k][1]);
+    }
+    for (let i = 0; i < nPallet; i++) {
+      const p = place(1.3, 1.1, 1.4);
+      if (p) pallet(p.x, p.z, 1 + ((r() * 3) | 0));
+    }
+  };
+  const poleC2 = C(0x55595e);
+  const lampPost = (x, z, h = 7.5, pool = 14) => {
+    put('steel', new THREE.CylinderGeometry(0.07, 0.1, h, 8), x, h / 2, z, 0, poleC2);
+    put('steel', new THREE.BoxGeometry(0.9, 0.1, 0.34), x, h, z, 0, poleC2);
+    lampAt(x, h - 0.09, z, pool);
+    colBox(x, h / 2, z, 0.22, h, 0.22, 1);
+    reserve(x - 0.5, z - 0.5, x + 0.5, z + 0.5);
+  };
+  // 화물차. q: 방향(90도 단위, 0이면 머리가 +x), kind: box 탑차 / cont 컨테이너 / tanker 탱크 / trailer 머리 없는 트레일러
+  const cabCols = [0xb8c0c6, 0x2a5d8f, 0x8a1c14, 0xd9d6cc, 0x3d6b4a].map(C), boxCols = [0xd9d6cc, 0xb9bcbe, 0x8f989c, 0xc9c2a8].map(C), darkC = C(0x1c1e21);
+  const truck = (x, z, q, kind = 'box') => {
+    const th = (q * Math.PI) / 2, cs = Math.cos(th), sn = Math.sin(th);
+    const P = (list, g, lx, y, lz, col) => { g.rotateY(th); put(list, g, x + lx * cs + lz * sn, y, z - lx * sn + lz * cs, 0, col); };
+    const cabC = cabCols[(r() * cabCols.length) | 0], bodyC = boxCols[(r() * boxCols.length) | 0];
+    P('steel', new THREE.BoxGeometry(8.6, 0.45, 1.0), 0, 0.8, 0, darkC);
+    for (const lz of [-1.0, 1.0]) P('steel', new THREE.BoxGeometry(2.6, 0.6, 0.45), 0.6, 0.72, lz, darkC);
+    for (const lx of kind === 'trailer' ? [-2.5, -3.7] : [3.3, -2.5, -3.7]) for (const lz of [-1.05, 1.05]) {
+      const g = new THREE.CylinderGeometry(0.5, 0.5, 0.32, 14);
+      g.rotateX(Math.PI / 2);
+      P('steel', g, lx, 0.5, lz, darkC);
+    }
+    if (kind !== 'trailer') {
+      P('steel', new THREE.BoxGeometry(2.0, 2.45, 2.4), 3.4, 2.02, 0, cabC);
+      P('glass', new THREE.BoxGeometry(0.06, 0.95, 2.1), 4.42, 2.45, 0, null);
+      P('steel', new THREE.BoxGeometry(0.12, 0.5, 2.4), 4.44, 0.95, 0, darkC);
+    } else P('steel', new THREE.BoxGeometry(0.2, 1.0, 0.2), 3.6, 0.5, 0, darkC);
+    if (kind === 'tanker') {
+      const g = new THREE.CylinderGeometry(1.2, 1.2, 6.3, 18);
+      g.rotateZ(Math.PI / 2);
+      P('steel', g, -1.0, 2.25, 0, C(0xb9bcbe));
+    } else if (kind === 'cont') {
+      const g = box(CL, CH, CW, 2.2, CH);
+      g.rotateY(th);
+      put('container', g, x - 1.0 * cs, 1.05 + CH / 2, z + 1.0 * sn, 0, palette[(r() * palette.length) | 0]);
+    } else P('steel', new THREE.BoxGeometry(6.4, 2.7, 2.5), -1.0, 2.4, 0, bodyC);
+    const hw = q % 2 ? 1.3 : 4.5, hd = q % 2 ? 4.5 : 1.3;
+    addCol(x - hw, 0, z - hd, x + hw, kind === 'trailer' || kind === 'tanker' ? 3.5 : 3.75, z + hd, 1);
+    reserve(x - hw - 0.3, z - hd - 0.3, x + hw + 0.3, z + hd + 0.3);
+  };
+  // 한쪽이 트인 창고형 건물 (open: 'n' 's' 'e' 'w')
+  const shed = (x0, z0, x1, z1, h, open, col) => {
+    const t = 0.3, sc = col || C(0x8f989c);
+    const seg = (ax0, az0, ax1, az1) => {
+      put('container', box(ax1 - ax0, h, az1 - az0, 2.2, h), (ax0 + ax1) / 2, h / 2, (az0 + az1) / 2, 0, sc);
+      addCol(ax0, 0, az0, ax1, h, az1, 1);
+    };
+    if (open !== 'n') seg(x0, z0, x1, z0 + t);
+    if (open !== 's') seg(x0, z1 - t, x1, z1);
+    if (open !== 'w') seg(x0, z0 + t, x0 + t, z1 - t);
+    if (open !== 'e') seg(x1 - t, z0 + t, x1, z1 - t);
+    put('container', box(x1 - x0 + 0.6, 0.16, z1 - z0 + 0.6, 2.2, 2.2), (x0 + x1) / 2, h + 0.08, (z0 + z1) / 2, 0, C(0x7d8589));
+    addCol(x0 - 0.3, h, z0 - 0.3, x1 + 0.3, h + 0.16, z1 + 0.3, 1);
+    reserve(x0 - 1, z0 - 1, x1 + 1, z1 + 1);
+    const nx = Math.max(1, Math.round((x1 - x0) / 7)), nz = Math.max(1, Math.round((z1 - z0) / 7));
+    for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) lampAt(x0 + ((i + 0.5) * (x1 - x0)) / nx, h - 0.25, z0 + ((j + 0.5) * (z1 - z0)) / nz, 8, 0, false);
+    const g = new THREE.PlaneGeometry(x1 - x0 - 0.4, z1 - z0 - 0.4), uv = g.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * (x1 - x0)) / 3, (uv.getY(i) * (z1 - z0)) / 3);
+    g.rotateX(-Math.PI / 2);
+    g.translate((x0 + x1) / 2, 0.004, (z0 + z1) / 2);
+    L.floor.push(g);
+  };
+  const puddles = (n, x0, x1, z0, z1) => {
+    for (let i = 0; i < n; i++) {
+      const s = 3.5 + r() * 3.5, g = new THREE.PlaneGeometry(s, s * (0.6 + r() * 0.4));
+      g.rotateX(-Math.PI / 2);
+      g.rotateY(r() * 6.28);
+      g.translate(x0 + r() * (x1 - x0), 0.022, z0 + r() * (z1 - z0));
+      L.puddle.push(g);
+    }
+  };
+  const farCrane = (x, z, h, col) => {
+    for (const dx of [-11, 11]) for (const dz of [-8, 8]) put('steel', new THREE.BoxGeometry(2.4, h, 2.4), x + dx, h / 2, z + dz, 0, col);
+    put('steel', new THREE.BoxGeometry(26, 3.5, 20), x, h, z, 0, col);
+    put('steel', new THREE.BoxGeometry(4, 3, 95), x, h + 3.5, z + 20, 0, col);
+    put('steel', new THREE.BoxGeometry(2, 16, 2), x, h + 10, z - 4, 0, col);
+  };
+
+  // ───────────────────────── 부두: 안벽과 대형 크레인, 정박한 화물선, 줄지어 쌓인 컨테이너 통로
+  const layoutDock = () => {
+    Object.assign(B, { x0: -62, x1: 62, z0: -24, z1: 26 });
+    Object.assign(START, { x: -55, z: 21, yaw: -Math.PI / 2 });
+    groundRect(-350, 350, -24.3, 350);
+    { // 바다와 안벽
+      const g = new THREE.PlaneGeometry(900, 520);
+      g.rotateX(-Math.PI / 2);
+      g.translate(0, -1.5, -284.3);
+      L.water.push(g);
+      put('concrete', box(700, 1.7, 0.6, 3), 0, -0.85, -24.6);
+      put('concrete', box(124.6, 0.3, 0.45, 3), 0, 0.15, -24.08);
+      for (let x = -58; x <= 58; x += 11.6) {
+        put('steel', new THREE.CylinderGeometry(0.2, 0.26, 0.5, 10), x, 0.25, -23.2, 0, C(0x2a2c2e));
+        put('steel', new THREE.CylinderGeometry(0.32, 0.2, 0.14, 10), x, 0.55, -23.2, 0, C(0x2a2c2e));
+        colBox(x, 0.3, -23.2, 0.5, 0.6, 0.5, 1);
+      }
+    }
+    { // 정박한 화물선 (배경, 선체만 충돌)
+      const hullC = C(0x16242f), lineC = C(0x7a2a20), whiteC = C(0xd9d6cc);
+      put('steel', new THREE.BoxGeometry(118, 9.4, 20), -4, 4.8, -37.5, 0, hullC);
+      put('steel', new THREE.BoxGeometry(118.2, 1.7, 20.2), -4, -0.65, -37.5, 0, lineC);
+      put('steel', new THREE.BoxGeometry(118.4, 0.5, 20.4), -4, 9.6, -37.5, 0, C(0x2b3740));
+      addCol(-63, -1.5, -47.5, 55, 9.8, -27.5, 1);
+      put('steel', new THREE.BoxGeometry(14, 14, 17), 44, 16.8, -37.5, 0, whiteC);
+      for (const y of [14.5, 18, 21.5]) put('glass', new THREE.BoxGeometry(14.1, 1.0, 15), 44, y, -37.5);
+      put('steel', new THREE.BoxGeometry(4, 6.5, 4), 46, 27, -37.5, 0, C(0x23282c));
+      put('steel', new THREE.BoxGeometry(0.3, 9, 0.3), 40, 28.3, -37.5, 0, whiteC);
+      for (let x = -58; x < 33; x += 6.3) {
+        for (let row = 0; row < 6; row++) {
+          if (r() < 0.14) continue;
+          const hh = 1 + ((r() * 3) | 0);
+          put('container', box(CL, CH * hh, CW, 2.2, CH), x, 9.85 + (CH * hh) / 2, -44.1 + row * 2.62, 0, palette[(r() * palette.length) | 0]);
+        }
+      }
+    }
+    // 안벽 크레인 3기
+    const stsC = C(0x1f5f8b), stsW = C(0xd8d4c6);
+    for (const x of [-38, 0, 38]) {
+      for (const dx of [-7, 7]) for (const z of [-21, -9]) {
+        put('steel', new THREE.BoxGeometry(1.3, 26, 1.3), x + dx, 13, z, 0, stsC);
+        colBox(x + dx, 13, z, 1.3, 26, 1.3, 1);
+        reserve(x + dx - 1.8, z - 1.8, x + dx + 1.8, z + 1.8);
+      }
+      for (const z of [-21, -9]) put('steel', new THREE.BoxGeometry(15.3, 1.4, 1.2), x, 12, z, 0, stsC);
+      for (const dx of [-7, 7]) put('steel', new THREE.BoxGeometry(1.2, 1.4, 13.2), x + dx, 26, -15, 0, stsC);
+      put('steel', new THREE.BoxGeometry(2.4, 1.6, 64), x, 27.6, -31, 0, stsC);
+      put('steel', new THREE.BoxGeometry(1.0, 14, 1.0), x, 34.5, -15, 0, stsC);
+      for (const [z, len, ang] of [[-33, 40, 0.34], [-5, 22, -0.62]]) {
+        const g = new THREE.BoxGeometry(0.25, 0.25, len);
+        g.rotateX(ang);
+        put('steel', g, x, 34.4, z, 0, stsC);
+      }
+      put('steel', new THREE.BoxGeometry(5, 3.4, 6), x, 24.6, -12, 0, stsW);
+      put('steel', new THREE.BoxGeometry(3, 2.4, 3), x, 25.6, -35, 0, stsW);
+      for (const dx of [-1.1, 1.1]) for (const dz of [-1, 1]) put('steel', new THREE.BoxGeometry(0.05, 9, 0.05), x + dx, 20, -35 + dz, 0, darkC);
+      put('steel', new THREE.BoxGeometry(6.2, 0.3, 2.6), x, 15.4, -35, 0, C(0xb03a1e));
+      lampAt(x - 6, 11.2, -15, 16);
+      lampAt(x + 6, 11.2, -15, 16);
+    }
+    // 컨테이너 블록: 동서로 긴 세 줄, 가로 통로 두 곳
+    for (const z of [3, 9.5, 16]) {
+      for (let x = -45; x <= 51.1; x += 6.4) {
+        if ((x > -17 && x < -8) || (x > 15 && x < 24)) continue;
+        if (z === 3 && Math.abs(x + 0.2) < 0.1) { stackAt(x, z, 0, 1); continue; } // 올라갈 수 있는 1단
+        if (r() < 0.15) continue;
+        stackAt(x, z, 0, 1 + ((r() * 3) | 0));
+      }
+    }
+    crate(-2.1, 1.05, 1.2); crate(-0.8, 1.05, 1.2); crate(-0.8, 1.05, 1.0, 1.2); // 상자 계단 → 컨테이너 위
+    // 담장: 서·남·동 (동쪽 남단은 게이트)
+    wallC(-62.25, -24, -62.25, 26.5);
+    wallC(-62, 26.25, 62, 26.25);
+    wallC(62.25, -24, 62.25, 16.5);
+    for (const z of [16.6, 23.4]) { put('concrete', box(0.9, 4, 0.9, 3), 62.25, 2, z); colBox(62.25, 2, z, 0.9, 4, 0.9, 0); }
+    wallC(62.25, 23.6, 62.25, 26.5);
+    { const g = new THREE.BoxGeometry(0.12, 0.12, 6.4); g.rotateX(-0.9); put('steel', g, 62.25, 3.4, 18.6, 0, C(0xc9a227)); }
+    // 작업장(동쪽)과 정문 초소(서남)
+    shed(46, -6, 58, 0.2, 5, 'w');
+    crate(55.5, -4.6, 1.2); crate(55.6, -3.3, 1.0); pallet(50.5, -1.4, 3);
+    put('concrete', box(4, 2.8, 3.4, 3), -58.5, 1.4, 12);
+    colBox(-58.5, 1.4, 12, 4, 2.8, 3.4, 0);
+    put('glass', new THREE.BoxGeometry(0.05, 0.9, 2.2), -56.48, 1.9, 12);
+    reserve(-61, 10, -56, 14);
+    // 차량
+    truck(-22, -5.2, 0, 'cont'); truck(22, -14.5, 2, 'cont'); truck(-50, 4.5, 1, 'trailer'); truck(10, 21.5, 0, 'box');
+    for (const x of [-50, -25, 0, 25, 50]) lampPost(x, 25.3, 9, 16);
+    PB = { x0: -60, x1: 60, z0: -22, z1: -1 };
+    scatter(9, 9, 6, 4);
+    PB = { x0: -61, x1: -46, z0: 0, z1: 25 };
+    scatter(2, 3, 2, 1);
+    PB = { x0: -46, x1: 60, z0: 17, z1: 26 };
+    scatter(4, 4, 3, 2);
+    // 원경
+    for (let i = 0; i < 44; i++) {
+      const x = (r() - 0.5) * 320, z = 34 + r() * 110, st = 2 + ((r() * 3) | 0);
+      put('container', box(CL, CH * st, CW, 2.2, CH), x, (CH * st) / 2, z, r() < 0.5 ? Math.PI / 2 : 0, palette[(r() * palette.length) | 0]);
+    }
+    for (const [x, z, h] of [[-150, 60, 48], [130, 80, 52], [200, -10, 46]]) farCrane(x, z, h, C(0x9c3b22));
+    put('steel', new THREE.BoxGeometry(170, 12, 26), -190, 4.5, -330, 0, C(0x1d2a33));
+    put('steel', new THREE.BoxGeometry(16, 14, 20), -120, 17, -330, 0, C(0xcfcabb));
+    put('concrete', box(520, 3.4, 5, 3), 120, 0.2, -210);
+    // 도색선과 물웅덩이
+    for (const z of [-21.3, -20.7, -9.3, -8.7]) line(-61, z, 61, z, 0.12);
+    for (const z of [6.25, 12.75, 21.2]) line(-47, z, 54, z);
+    for (const x of [-12.5, 19.5]) line(x, 0.5, x, 25.5);
+    puddles(16, -58, 58, -22, 25);
+    WORLD.points = { gate: { x: 59, z: 20 }, craneW: { x: -38, z: -15 }, craneC: { x: 0, z: -15 }, craneE: { x: 38, z: -15 }, climb: { x: -0.2, y: CH, z: 3 } };
+  };
+
+  // ───────────────────────── 차량기지: 화물차 주차열, 하역 플랫폼, 정비고, 주유소, 유류 탱크, 감시탑
+  const layoutDepot = () => {
+    Object.assign(B, { x0: -46, x1: 46, z0: -36, z1: 36 });
+    Object.assign(START, { x: 0, z: 31, yaw: 0 });
+    groundRect(-350, 350, -350, 350);
+    // 담장과 정문
+    wallC(-46.25, -30, -46.25, 36.5);
+    wallC(46.25, -30, 46.25, 36.5);
+    wallC(-46, 36.25, -5, 36.25);
+    wallC(5, 36.25, 46, 36.25);
+    for (const x of [-5, 5]) { put('concrete', box(0.9, 4, 0.9, 3), x, 2, 36.25); colBox(x, 2, 36.25, 0.9, 4, 0.9, 0); }
+    { const g = new THREE.BoxGeometry(7.6, 0.12, 0.12); g.rotateZ(0.95); put('steel', g, -2.6, 3.6, 36.25, 0, C(0xc9a227)); }
+    put('concrete', box(2.8, 2.8, 2.8, 3), 8.4, 1.4, 33.2);
+    colBox(8.4, 1.4, 33.2, 2.8, 2.8, 2.8, 0);
+    put('glass', new THREE.BoxGeometry(2.0, 0.9, 0.05), 8.4, 1.9, 31.78);
+    lampAt(8.4, 2.86, 31.6, 7);
+    reserve(6.5, 31, 10.5, 35.5);
+    // 하역장 건물과 플랫폼 (북쪽)
+    const sideC = C(0x8f989c), roofC = C(0x7d8589), frameC = C(0x3c4248);
+    put('container', box(93, 8.5, 0.5, 2.2, 8.5), 0, 4.25, -30.25, 0, sideC);
+    addCol(-46.5, 0, -37, 46.5, 8.5, -30, 1);
+    put('concrete', box(76, 1.2, 4.5, 3), 0, 0.6, -27.75);
+    addCol(-38, 0, -30, 38, 1.2, -25.5, 0);
+    put('steel', new THREE.BoxGeometry(76, 0.16, 0.12), 0, 1.12, -25.46, 0, C(0xc9a227));
+    for (let x = -32; x <= 32; x += 8) {
+      put('steel', new THREE.BoxGeometry(3.3, 3.4, 0.08), x, 2.9, -29.97, 0, C(0x2e3338));
+      put('steel', new THREE.BoxGeometry(3.6, 0.18, 0.14), x, 4.7, -29.95, 0, C(0xc9a227));
+    }
+    put('container', box(78, 0.14, 6, 2.2, 2.2), 0, 5.77, -27.2, 0, roofC);
+    addCol(-39, 5.7, -30.2, 39, 5.84, -24.2, 1);
+    for (let x = -36; x <= 36; x += 12) {
+      put('steel', new THREE.BoxGeometry(0.22, 4.5, 0.22), x, 3.45, -25.75, 0, frameC);
+      addCol(x - 0.11, 1.2, -25.86, x + 0.11, 5.7, -25.64, 1);
+      lampAt(x + 6 > 36 ? x : x + 6, 5.62, -27.6, 8, 1.2, false);
+    }
+    for (const sgn of [-1, 1]) { // 양 끝 계단
+      for (let k = 1; k <= 5; k++) {
+        const xa = sgn * (38 + (6 - k) * 0.5) - (sgn > 0 ? 0.5 : 0);
+        put('concrete', box(0.5, k * 0.2, 3.4, 3), xa + 0.25, k * 0.1, -27.8);
+        addCol(xa, 0, -29.5, xa + 0.5, k * 0.2, -26.1, 0);
+        colliders[colliders.length - 1].noao = true;
+      }
+    }
+    crate(-27, -28.4, 1.2, 1.2); crate(-25.7, -28.5, 1.0, 1.2); crate(-11, -26.8, 1.2, 1.2); crate(5, -28.6, 1.2, 1.2); crate(5.1, -28.6, 1.0, 2.4); crate(21, -27, 1.2, 1.2); crate(30.5, -28.5, 1.0, 1.2);
+    reserve(-42, -31, 42, -24.5);
+    // 화물차: 플랫폼에 댄 두 대, 가운데 주차 두 줄
+    truck(-16, -20.6, 3, 'box'); truck(16, -20.6, 3, 'box');
+    for (const [x, kind] of [[-24, 'box'], [-18, 'box'], [-12, 'trailer'], [-6, 'box'], [6, 'tanker'], [12, 'box'], [24, 'box']]) truck(x, -2, 1, kind);
+    for (const [x, kind] of [[-21, 'box'], [-9, 'trailer'], [9, 'box'], [15, 'cont'], [21, 'box']]) truck(x, 14, 1, kind);
+    // 정비고 (남서, 동쪽이 트임)
+    shed(-45.6, 14, -31, 30, 5.2, 'e', C(0x7f8a86));
+    truck(-39, 19, 0, 'box');
+    for (const [x, z] of [[-44.6, 25], [-44.6, 27.4]]) { put('steel', new THREE.BoxGeometry(0.6, 1.1, 2.2), x, 0.55, z, 0, C(0x8a1c14)); colBox(x, 0.55, z, 0.6, 1.1, 2.2, 1); }
+    for (const [x, z, n] of [[-33.5, 28.6, 4], [-34.6, 28.4, 3], [-33, 15.4, 5]]) {
+      for (let k = 0; k < n; k++) put('steel', new THREE.CylinderGeometry(0.52, 0.52, 0.3, 14), x, 0.15 + k * 0.3, z, 0, darkC);
+      colBox(x, n * 0.15, z, 1.04, n * 0.3, 1.04, 1);
+    }
+    crate(-36.5, 27.6, 1.2); crate(-41.5, 28.4, 1.0); pallet(-37.5, 15.6, 3);
+    // 주유 캐노피 (남동)
+    for (const x of [25.5, 36.5]) for (const z of [18, 26]) { put('steel', new THREE.BoxGeometry(0.3, 4.6, 0.3), x, 2.3, z, 0, C(0xd9d6cc)); colBox(x, 2.3, z, 0.3, 4.6, 0.3, 1); }
+    put('steel', new THREE.BoxGeometry(13.4, 0.5, 10.4), 31, 4.85, 22, 0, C(0xb8261b));
+    addCol(24.3, 4.6, 16.8, 37.7, 5.1, 27.2, 1);
+    for (const z of [19.6, 24.4]) {
+      put('concrete', box(6.4, 0.2, 1.2, 3), 31, 0.1, z);
+      for (const x of [29.2, 32.8]) { put('steel', new THREE.BoxGeometry(0.7, 1.5, 0.9), x, 0.95, z, 0, C(0xd9d6cc)); colBox(x, 0.85, z, 0.7, 1.7, 0.9, 1); }
+      lampAt(31, 4.57, z, 9, 0, false);
+    }
+    reserve(24, 16.5, 38, 27.5);
+    // 유류 탱크 (북동)
+    for (const x of [30, 37]) {
+      const g = new THREE.CylinderGeometry(1.7, 1.7, 9, 20);
+      g.rotateX(Math.PI / 2);
+      put('steel', g, x, 2.3, -16, 0, C(0xc9cdd0));
+      for (const z of [-19, -13]) put('concrete', box(3, 0.9, 0.7, 3), x, 0.45, z);
+      colBox(x, 2, -16, 3.4, 4, 9, 1);
+      put('steel', new THREE.BoxGeometry(0.5, 0.5, 0.5), x, 4.2, -16, 0, C(0x8a1c14));
+    }
+    put('steel', new THREE.BoxGeometry(7.4, 0.14, 0.14), 33.5, 0.5, -11.2, 0, frameC);
+    put('concrete', box(2.2, 2.4, 2.2, 3), 41.5, 1.2, -10.6);
+    colBox(41.5, 1.2, -10.6, 2.2, 2.4, 2.2, 0);
+    reserve(27, -21.5, 43.5, -9);
+    // 감시탑 (북서)
+    {
+      const tx = -40, tz = -19;
+      for (const dx of [-1.4, 1.4]) for (const dz of [-1.4, 1.4]) { put('steel', new THREE.BoxGeometry(0.22, 6.2, 0.22), tx + dx, 3.1, tz + dz, 0, frameC); colBox(tx + dx, 3.1, tz + dz, 0.22, 6.2, 0.22, 1); }
+      put('wood', box(3.4, 0.2, 3.4, 1.2), tx, 6.3, tz);
+      addCol(tx - 1.7, 6.2, tz - 1.7, tx + 1.7, 6.4, tz + 1.7, 2);
+      for (const dx of [-1.6, 1.6]) put('steel', new THREE.BoxGeometry(0.06, 0.06, 3.3), tx + dx, 7.4, tz, 0, frameC);
+      for (const dz of [-1.6, 1.6]) put('steel', new THREE.BoxGeometry(3.3, 0.06, 0.06), tx, 7.4, tz + dz, 0, frameC);
+      for (const dx of [-1.6, 1.6]) for (const dz of [-1.6, 1.6]) put('steel', new THREE.BoxGeometry(0.08, 2.3, 0.08), tx + dx, 7.55, tz + dz, 0, frameC);
+      put('container', box(3.9, 0.12, 3.9, 2.2, 2.2), tx, 8.76, tz, 0, roofC);
+      for (let k = 0; k < 15; k++) put('steel', new THREE.BoxGeometry(0.5, 0.04, 0.04), tx + 1.4, 0.4 + k * 0.4, tz - 1.56, 0, frameC);
+      reserve(tx - 2.2, tz - 2.2, tx + 2.2, tz + 2.2);
+      WORLD.points.tower = { x: tx + 0.9, y: 6.4, z: tz + 0.9 };
+    }
+    for (const [x, z] of [[-30, -12], [0, -12], [30, -6], [-30, 6], [0, 6], [30, 6], [-12, 30], [14, 29], [-26, 33], [42, 31], [-43, -6], [20, -23]]) lampPost(x, z);
+    PB = { x0: -44, x1: 44, z0: -24, z1: 34 };
+    scatter(11, 11, 8, 5);
+    // 원경: 불 켜진 건물들
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * 6.283 + r() * 0.3, d = 85 + r() * 80, x = Math.cos(a) * d, z = Math.sin(a) * d, w = 16 + r() * 26, h = 9 + r() * 22, dp = 12 + r() * 14;
+      const fx = Math.abs(Math.cos(a)) > Math.abs(Math.sin(a)); // 맵 중심을 향한 면이 x축 방향인지
+      put('steel', new THREE.BoxGeometry(fx ? dp : w, h, fx ? w : dp), x, h / 2, z, 0, C(0x20252b));
+      const face = fx ? x - (Math.sign(x) * dp) / 2 - Math.sign(x) * 0.06 : z - (Math.sign(z) * dp) / 2 - Math.sign(z) * 0.06;
+      for (let fy = 3; fy < h - 1.5; fy += 3.2) for (let u = -w / 2 + 2; u < w / 2 - 1; u += 3) {
+        if (r() > 0.3) continue;
+        const g = fx ? new THREE.BoxGeometry(0.05, 1.1, 1.5) : new THREE.BoxGeometry(1.5, 1.1, 0.05);
+        g.translate(fx ? face : x + u, fy, fx ? z + u : face);
+        L.lamp.push(g);
+      }
+    }
+    for (const z of [-24.6, 5.6, 6.4, 21.5]) line(-44, z, 44, z);
+    for (let x = -27; x <= 27; x += 6) { line(x, -7, x, 3, 0.12); if (Math.abs(x) > 4) line(x, 9, x, 19, 0.12); }
+    puddles(9, -42, 42, -22, 32);
+    WORLD.points = { ...WORLD.points, gate: { x: 0, z: 32 }, garage: { x: -37, z: 23 }, dock: { x: 0, z: -22 }, tanks: { x: 33.5, z: -10 }, pumps: { x: 31, z: 22 } };
+  };
+  if (mapId === 'dock') layoutDock();
+  else if (mapId === 'depot') layoutDepot();
+  else layoutYard();
+
   // ── 접지 그림자: 바닥에 놓인 충돌체 둘레
   for (const c of colliders) {
     const w = c.x1 - c.x0, d = c.z1 - c.z0;
@@ -459,7 +859,8 @@ export function buildWorld(scene, M) {
     m.castShadow = cast;
     m.receiveShadow = true;
     m.renderOrder = order;
-    scene.add(m);
+    m.userData.list = list;
+    track(m);
     return m;
   };
   add('concrete', M.concrete);
@@ -470,10 +871,13 @@ export function buildWorld(scene, M) {
   add('floor', M.floor, false, 0.2);
   add('lamp', M.lamp, false);
   add('glow', M.glow, false, 3);
+  add('glowN', M.glowN, false, 3);
+  add('water', M.water, false);
   add('ao', M.ao, false, 0.5);
   add('marks', M.marks, false, 1);
   add('paint', M.paint, false, 1);
   add('puddle', M.puddle, false, 2);
+  buildNav();
 }
 
 // ───────────────────────── 레이캐스트
@@ -639,6 +1043,8 @@ function hpop() {
 }
 
 export function buildNav() {
+  NAV.W = Math.round(B.x1 - B.x0);
+  NAV.H = Math.round(B.z1 - B.z0);
   const { W, H } = NAV, N = W * H, b = new Uint8Array(N), R = 0.42;
   for (const c of colliders) {
     if (c.y1 < 0.4 || c.y0 > 1.7) continue;

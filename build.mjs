@@ -30,7 +30,7 @@ if (version) {
   mkdirSync('versions', { recursive: true });
   writeFileSync(`versions/yard-zero-${version}.html`, html);
   // 저장소 루트: GitHub Pages로 서비스되는 설치형(PWA) 판
-  writeFileSync('index.html', full.replace(pwaMarker, () => readFileSync('pwa/head.html', 'utf8')));
+  writeFileSync('index.html', full.replace(pwaMarker, () => readFileSync('pwa/head.html', 'utf8').replace(/__VERSION__/g, version)));
   writeFileSync('sw.js', readFileSync('pwa/sw.js', 'utf8').replace('__VERSION__', version));
 }
 console.log(`built ${(html.length / 1024).toFixed(0)} KB${version ? ' → versions/yard-zero-' + version + '.html' : ''}`);

@@ -2,7 +2,11 @@
 import { clamp, TAU } from './util.js';
 import { SAMPLES } from './samples.js';
 
-let ac = null, master = null, on = true;
+let ac = null, master = null, on = true, rainGain = null, wantRain = false;
+export function setRain(v) {
+  wantRain = !!v;
+  if (rainGain && ac) rainGain.gain.setTargetAtTime(wantRain ? 0.16 : 0, ac.currentTime, 0.6);
+}
 const bufs = {};
 const vars = {}; // 이름 → 디코드된 샘플 변주 목록
 const last = {};
@@ -184,6 +188,22 @@ export function initAudio() {
   wg.gain.value = 0.5;
   ws.connect(wg);
   wg.connect(master);
+  // 빗소리: 흰 잡음을 고역만 남겨 반복 재생 (비 오는 환경에서만 켠다)
+  const rb = ac.createBuffer(1, Math.floor(ac.sampleRate * 2.5), ac.sampleRate), rd = rb.getChannelData(0);
+  for (let i = 0; i < rd.length; i++) rd[i] = (Math.random() * 2 - 1) * (0.75 + 0.25 * Math.sin(i / 700));
+  const rs = ac.createBufferSource();
+  rs.buffer = rb;
+  rs.loop = true;
+  const rf = ac.createBiquadFilter();
+  rf.type = 'bandpass';
+  rf.frequency.value = 5200;
+  rf.Q.value = 0.35;
+  rainGain = ac.createGain();
+  rainGain.gain.value = wantRain ? 0.16 : 0;
+  rs.connect(rf);
+  rf.connect(rainGain);
+  rainGain.connect(master);
+  rs.start();
   ws.start();
 }
 

@@ -64,7 +64,7 @@ export function loadMocap(done) {
       try {
         const map = tex(diffUrl, true), nrm = tex(nrmUrl, false);
         const mk = (c) => new THREE.MeshStandardMaterial({ map, normalMap: nrm, normalScale: new THREE.Vector2(1, -1), color: c, roughness: 0.86, metalness: 0 });
-        MOCAP.mats = { rifle: mk(0xffffff), rifle2: mk(0xe0dccb), rusher: mk(0xc48f74), heavy: mk(0x6f7a66), sniper: mk(0x8b98aa) };
+        MOCAP.mats = { rifle: mk(0xffffff), rifle2: mk(0xe0dccb), rusher: mk(0xc48f74), heavy: mk(0x6f7a66), sniper: mk(0x8b98aa), ally: mk(0x74aee6), ally2: mk(0x66c2bd) };
         MOCAP.visor = new THREE.MeshStandardMaterial({ color: 0x0a0d10, roughness: 0.12, metalness: 0.7 });
         MOCAP.scene = gltf.scene;
         MOCAP.clips = {};
@@ -319,7 +319,7 @@ export class MocapBody {
 
   animate(e, dt) {
     const w = this.w, act = this.act, s = e.speed;
-    this.root.position.set(e.pos.x, 0, e.pos.z);
+    this.root.position.set(e.pos.x, e.elev || 0, e.pos.z);
     this.root.rotation.set(0, e.bodyYaw, 0);
     if (this.loco === 'Idle') { if (s > 0.35) this.loco = s > 2.7 ? 'Run' : 'Walk'; }
     else if (s < 0.2) this.loco = 'Idle';

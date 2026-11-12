@@ -10,7 +10,31 @@
 // PWA: 서비스 워커 등록, 설치 버튼(Android·데스크톱 Chrome), iOS 설치 안내
 (function () {
   var ok = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-  if (ok && 'serviceWorker' in navigator) window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+  if (ok && 'serviceWorker' in navigator) {
+    var hadCtl = !!navigator.serviceWorker.controller;
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').then(function (reg) {
+        // 열고 3초 뒤, 그리고 앱으로 돌아올 때마다 새 버전이 있는지 직접 확인한다(브라우저가 스스로 확인하는 때를 기다리지 않는다)
+        var check = function () { try { var p = reg.update(); if (p && p.catch) p.catch(function () {}); } catch (e) {} };
+        setTimeout(check, 3000);
+        document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') check(); });
+      }).catch(function () {});
+    });
+    // 새 서비스 워커가 넘겨받았고 그 버전이 지금 열린 화면과 다르면(= 화면이 옛 판) 메뉴에 "새 버전 적용" 버튼을 보인다.
+    // 온라인으로 열어 이미 새 판이 떠 있으면 버전이 같으므로 띄우지 않는다
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (!hadCtl) { hadCtl = true; return; }
+      var c = navigator.serviceWorker.controller;
+      if (!c || !window.MessageChannel) return;
+      var ch = new MessageChannel();
+      ch.port1.onmessage = function (e) {
+        if (!e.data || !e.data.v || e.data.v === '__VERSION__') return;
+        var b = document.getElementById('btnUpdate');
+        if (b) b.classList.remove('hidden');
+      };
+      c.postMessage({ type: 'yz-ver' }, [ch.port2]);
+    });
+  }
   var mm = window.matchMedia ? function (q) { return matchMedia(q).matches; } : function () { return false; };
   var standalone = mm('(display-mode: standalone)') || mm('(display-mode: fullscreen)') || navigator.standalone === true;
   var deferred = null;
@@ -26,6 +50,8 @@
     if (b) b.classList.add('hidden');
   });
   document.addEventListener('DOMContentLoaded', function () {
+    var up = document.getElementById('btnUpdate');
+    if (up) up.addEventListener('click', function () { location.reload(); });
     var b = document.getElementById('btnInstall'), h = document.getElementById('iosHint');
     if (b) b.addEventListener('click', function () {
       if (!deferred) return;

@@ -7,7 +7,8 @@ const ctx = await browser.newContext({ viewport: { width: 844, height: 390 }, de
 const page = await ctx.newPage();
 const errors = [];
 page.on('pageerror', (e) => errors.push('[pageerror] ' + e.message));
-await page.route('**/*', (r) => (r.request().url().startsWith('http://127.0.0.1') ? r.continue() : r.abort()));
+const origin = new URL(base).origin;
+await page.route('**/*', (r) => (r.request().url().startsWith(origin) ? r.continue() : r.abort())); // 같은 출처만 허용(글꼴 등 외부 요청 차단)
 await page.goto(base);
 await page.waitForFunction(() => window.__yz && (window.__yz.MOCAP.ready || window.__yz.MOCAP.failed), null, { timeout: 60000 });
 const out = {};
