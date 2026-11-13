@@ -1,5 +1,5 @@
 // YARD ZERO 서비스 워커: 한 번 열면 오프라인에서도 실행되도록 캐시한다. build.mjs가 버전을 채워 루트 sw.js로 내보낸다.
-const VERSION = 'v0.6.1';
+const VERSION = 'v0.7';
 const CACHE = 'yard-zero-' + VERSION;
 const CORE = ['index.html', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'];
 

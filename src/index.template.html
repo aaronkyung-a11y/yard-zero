@@ -175,7 +175,18 @@ body.portrait .cards.eplist{grid-template-columns:repeat(2,minmax(0,1fr))}
 .card.ep{min-height:110px}
 .card.ep .sq2{font:500 clamp(11px,2.9vmin,13px)/1.3 var(--body);color:#8fd6ff}
 .card.locked{opacity:.38;cursor:default}
-#eps,#epdone{background:linear-gradient(180deg,rgba(9,11,12,.88) 0%,rgba(9,11,12,.76) 100%)}
+#eps,#epdone,#coop{background:linear-gradient(180deg,rgba(9,11,12,.88) 0%,rgba(9,11,12,.76) 100%)}
+.cocode{margin:6px 0 0;font:700 clamp(40px,13vmin,84px)/1 var(--body);letter-spacing:.14em;color:var(--amber);font-variant-numeric:tabular-nums}
+#coErr{margin:10px 0 0;font:500 clamp(13px,3.4vmin,16px)/1.4 var(--body);color:#ff8a70;max-width:38ch}
+#coErr:empty{display:none}
+#coStatus{margin-top:10px;max-width:38ch;line-height:1.4}
+#coKeys{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;max-width:300px}
+.key{background:rgba(18,21,23,.82);color:var(--ink);border:1px solid var(--line);border-radius:3px;font:700 clamp(18px,5.4vmin,24px)/1 var(--body);padding:.62em 0;cursor:pointer;touch-action:manipulation}
+.key:active{border-color:var(--amber);transform:translateY(1px)}
+.go:disabled{opacity:.4;cursor:default}
+.corow{display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid var(--line);font:500 clamp(14px,3.8vmin,18px)/1.2 var(--body)}
+.corow b{color:#8fd6ff;font-weight:700}
+.corow span{color:var(--dim);font-variant-numeric:tabular-nums}
 html.standalone #btnFull,html.standalone #btnFull2{display:none}
 #err{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);font:500 16px/1.5 var(--body);text-align:center;padding:0 24px}
 body.portrait #topC{top:calc(42px + var(--st));left:calc(14px + var(--sl));transform:none}
@@ -197,7 +208,7 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
   <div id="scope" class="hidden"><i class="h"></i><i class="v"></i><i class="c"></i></div>
   <div id="topL"><span class="lbl">HP</span><div id="hpBar"><i id="hpFill"></i></div><b id="hpNum">100</b></div>
   <div id="topC"><span id="waveTxt">WAVE 1</span><span id="enemyTxt">적 4</span></div>
-  <div id="topR"><b id="scoreTxt">0</b><span class="lbl">점수</span><span class="lbl" id="hudVer" style="text-transform:none;opacity:.7"></span></div>
+  <div id="topR"><b id="scoreTxt">0</b><span class="lbl">점수</span><span class="lbl" id="hudVer" style="text-transform:none;opacity:.7;white-space:nowrap;letter-spacing:.06em"></span></div>
   <div id="obj" class="hidden"><b id="objT"></b><span id="objS"></span></div>
   <div id="squad" class="hidden"><div class="sq hidden"><b></b><i><u></u></i></div><div class="sq hidden"><b></b><i><u></u></i></div><div class="sq hidden"><b></b><i><u></u></i></div><div id="sqOw" class="sq hidden"><b>오 상병</b><em>엄호 중</em></div></div>
   <div id="radio" class="hidden"><b id="radioN"></b><span id="radioT"></span></div>
@@ -229,10 +240,11 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
     <div>
       <p class="eyebrow"><b id="verTop">v0.0</b> · YZRU 261111 0 · 22G1</p>
       <h1>YARD ZERO</h1>
-      <p class="tag">항만 일대에서 이어지는 작전. 팀원이 합류하고 흩어지는 에피소드를 차례로 진행하거나, 생존 모드에서 웨이브를 막아내세요.</p>
+      <p class="tag">항만 일대에서 이어지는 작전. 팀원이 합류하고 흩어지는 에피소드를 차례로 진행하거나, 혼자 또는 친구와 웨이브를 막아내세요.</p>
       <div class="row">
         <button class="go" id="btnCamp">작전</button>
         <button class="ghost" id="btnStart">생존 모드</button>
+        <button class="ghost" id="btnCoop">협동</button>
         <span class="best">최고 기록 <b id="bestTxt">0</b>점</span>
       </div>
       <div class="row">
@@ -320,6 +332,46 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
   </div>
 </div>
 
+<div id="coop" class="overlay hidden">
+  <div class="wrap">
+    <div>
+      <p class="eyebrow">협동 생존 · 2~4명</p>
+      <h2>협동</h2>
+      <p id="coErr"></p>
+      <div id="coChoose">
+        <p class="tag">한 명이 방을 만들고, 나머지는 방 코드로 들어옵니다.</p>
+        <div class="row"><button class="go" id="btnCoHost">방 만들기</button><button class="ghost" id="btnCoJoin">코드로 참가</button><button class="ghost" id="btnCoBack">뒤로</button></div>
+      </div>
+      <div id="coPad" class="hidden">
+        <p class="best" style="margin-top:14px">방 코드 5자리</p>
+        <p class="cocode" id="coEntry">·····</p>
+        <div class="row"><button class="go" id="btnCoGo" disabled>참가</button><button class="ghost" id="btnCoPadBack">뒤로</button></div>
+      </div>
+      <div id="coRoom" class="hidden">
+        <p class="best" style="margin-top:14px">방 코드</p>
+        <p class="cocode" id="coCode">·····</p>
+        <p class="best" id="coStatus"></p>
+        <div class="row"><button class="go" id="btnCoStart">시작</button><button class="ghost" id="btnCoShare">초대 링크 공유</button><button class="ghost" id="btnCoLeave">방 나가기</button></div>
+      </div>
+    </div>
+    <div>
+      <div id="coKeys" class="hidden">
+        <button class="key" data-k="1">1</button><button class="key" data-k="2">2</button><button class="key" data-k="3">3</button>
+        <button class="key" data-k="4">4</button><button class="key" data-k="5">5</button><button class="key" data-k="6">6</button>
+        <button class="key" data-k="7">7</button><button class="key" data-k="8">8</button><button class="key" data-k="9">9</button>
+        <span></span><button class="key" data-k="0">0</button><button class="key" data-k="del" aria-label="지우기">⌫</button>
+      </div>
+      <div id="coSide" class="hidden"><div id="coList"></div></div>
+      <dl id="coHelp" style="margin-top:14px">
+        <dt>적</dt><dd>방을 만든 폰이 계산. 그 폰의 화면이 꺼지면 모두 멈춤</dd>
+        <dt>적의 수</dt><dd>사람이 늘수록 많아짐</dd>
+        <dt>쓰러지면</dt><dd>10초 뒤 출발 지점에서 복귀. 전원이 함께 쓰러지면 끝</dd>
+        <dt>보급</dt><dd>웨이브 사이에 각자 하나씩. 게임은 멈추지 않음</dd>
+      </dl>
+    </div>
+  </div>
+</div>
+
 <div id="epdone" class="overlay hidden">
   <div class="wrap">
     <div>
@@ -350,6 +402,7 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
         <div><b id="oHead">0</b><span class="lbl">헤드샷</span></div>
         <div><b id="oAcc">0%</b><span class="lbl">명중률</span></div>
       </div>
+      <p class="best" id="overNote" style="margin-top:14px"></p>
       <div class="row"><button class="go" id="btnAgain">다시 도전</button><button class="ghost hidden" id="btnOverList">작전 목록</button></div>
     </div>
     <div></div>

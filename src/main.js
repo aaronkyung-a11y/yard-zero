@@ -10,8 +10,9 @@ import { initSoldierAssets, PuppetBody } from './soldier.js';
 import { MOCAP, loadMocap, MocapBody } from './mocap.js';
 import { buildViewmodel } from './viewmodel.js';
 import { EPISODES, SQUAD } from './episodes.js';
+import { NET, host as netHost, join as netJoin, sendEv, sendSt, close as netClose } from './net.js';
 
-const VERSION = 'v0.6.1';
+const VERSION = 'v0.7';
 const UP = new THREE.Vector3(0, 1, 0);
 const _f = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _d = new THREE.Vector3(), _v = new THREE.Vector3(), _w = new THREE.Vector3(), _m = new THREE.Vector3(), _mz = new THREE.Vector3();
 const ZAXIS = new THREE.Vector3(0, 0, 1);
@@ -279,13 +280,20 @@ const cam = { landDip: 0, roll: 0, hurtRoll: 0, shake: 0 };
 const game = { state: 'menu', queue: [], time: 0, wave: 0, toSpawn: 0, spawnT: 0, between: 0, score: 0, kills: 0, headshots: 0, shots: 0, hits: 0, dieT: 0, best: store.get('best', 0) };
 const enemies = [], pickups = [];
 let tokens = 0, aliveCount = 0, whizT = 0;
+// 협동(네트워크) 상태. host: 내가 방장인가, pid: 내 번호(방장 0), players: 다른 플레이어(pid → RemotePlayer), en: 참가자 쪽 적(번호 → Enemy)
+const coop = { on: false, host: false, started: false, pid: 0, players: new Map(), en: new Map(), roster: [], nextId: 0, seq: 0, snapSeq: -1, gen: 0, dead: new Set(), lastSend: 0, lastSnap: 0, stall: false, shots: [], myShots: 0, supplyT: 0, picked: new Set(), safeT: 0, downSec: -1, allDownT: 0, lost: '' };
+const COOP_NAMES = ['알파', '브라보', '찰리', '델타'];
+// 게임이 흘러가는 상태인가. 협동에서는 보급 선택·일시정지 화면을 띄워도 세계는 멈추지 않는다
+const live = () => game.state === 'playing' || game.state === 'dying' || (coop.on && coop.started && (game.state === 'supply' || game.state === 'paused'));
+const humans = () => (coop.on ? [player, ...coop.players.values()] : [player]); // 적이 상대하는 사람 플레이어
+const nPlayers = () => (coop.on ? 1 + coop.players.size : 1);
 const maxTokens = () => 1 + Math.floor(game.wave / 2) + allies.length;
-const maxConc = () => Math.min(3 + Math.floor(game.wave / 2), 7);
+const maxConc = () => Math.min(3 + Math.floor(game.wave / 2), 7) + (nPlayers() - 1) * 2;
 const assist = { t: 0 };
 
 // ───────────────────────── HUD
 const el = {};
-for (const id of ['obj', 'objT', 'objS', 'squad', 'sqOw', 'radio', 'radioN', 'radioT', 'mk', 'mkD', 'tags', 'eps', 'epdone', 'rl', 'rlFill', 'hint', 'supply', 'supplySub', 'sup0', 'sup1', 'sup2', 'hud', 'touch', 'bPause', 'menu', 'pause', 'over', 'hpFill', 'hpNum', 'waveTxt', 'enemyTxt', 'scoreTxt', 'feed', 'msg', 'msgT', 'msgS', 'ch', 'hm', 'dmgs', 'rl', 'rlFill', 'hint',
+for (const id of ['coop', 'hudVer', 'obj', 'objT', 'objS', 'squad', 'sqOw', 'radio', 'radioN', 'radioT', 'mk', 'mkD', 'tags', 'eps', 'epdone', 'rl', 'rlFill', 'hint', 'supply', 'supplySub', 'sup0', 'sup1', 'sup2', 'hud', 'touch', 'bPause', 'menu', 'pause', 'over', 'hpFill', 'hpNum', 'waveTxt', 'enemyTxt', 'scoreTxt', 'feed', 'msg', 'msgT', 'msgS', 'ch', 'hm', 'dmgs', 'rl', 'rlFill', 'hint',
   'joy', 'knob', 'bAds', 'bCrouch', 'ammoN', 'ammoR', 'wName', 'hurt', 'bestTxt', 'sensTxt', 'sensTxt0', 'scope', 'grenN']) el[id] = $(id);
 const cache = {};
 const hudS = { hm: 0, hurt: 0, msg: 0 };
@@ -408,6 +416,16 @@ function rayPlayer(ox, oy, oz, d, maxT) {
   return t > 0 && t < maxT && y >= player.pos.y && y <= player.pos.y + player.bodyH ? t : -1;
 }
 
+// 적 탄이 카메라 가까이를 스치면 통과음
+function whizNear(ox, oy, oz, d, tEnd) {
+  _v.subVectors(camera.position, _w.set(ox, oy, oz));
+  const tca = _v.dot(d);
+  if (tca > 2 && tca < tEnd && _v.lengthSq() - tca * tca < 1.6 && game.time - whizT > 0.12) {
+    whizT = game.time;
+    SFX.play('whiz', 0.5, rr(0.85, 1.2), (Math.random() < 0.5 ? -1 : 1) * rr(0.3, 0.8));
+  }
+}
+
 function ejectShell() {
   camera.getWorldDirection(_f);
   _r.crossVectors(_f, UP).normalize();
@@ -418,6 +436,7 @@ function ejectShell() {
 }
 
 function shoot(w) {
+  coop.myShots = (coop.myShots + 1) & 255;
   w.ammo--;
   vm.cool = 60 / w.rpm;
   vm.lastShot = game.time;
@@ -510,7 +529,7 @@ function supplyOptions() {
 }
 function openSupply() {
   prog.offer = supplyOptions();
-  el.supplySub.textContent = camp.on ? `작전 ${camp.idx + 1} · ${camp.si + 1}단계 완료` : `웨이브 ${game.wave} 격퇴`;
+  el.supplySub.textContent = camp.on ? `작전 ${camp.idx + 1} · ${camp.si + 1}단계 완료` : coop.on ? `웨이브 ${game.wave} 격퇴 · 각자 하나씩 · 다음 웨이브가 오면 닫힙니다` : `웨이브 ${game.wave} 격퇴`;
   for (let i = 0; i < 3; i++) {
     const b = el['sup' + i], s = prog.offer[i];
     b.classList.toggle('hidden', !s);
@@ -543,7 +562,8 @@ function pickSupply(i) {
   applySupply(s.id);
   prog.picks.push(s.id);
   feed('보급: ' + s.t);
-  game.between = 3.5;
+  if (coop.on) coopPicked(coop.pid);
+  else game.between = 3.5;
   setState('playing');
   last = performance.now();
 }
@@ -709,7 +729,7 @@ function updateViewmodel(dt) {
 
 // ───────────────────────── 플레이어
 function hurtPlayer(dmg, from) {
-  if (!player.alive) return;
+  if (!player.alive || coop.safeT > 0) return;
   player.hp -= dmg * (1 - 0.15 * prog.lv.armor);
   player.lastHurt = game.time;
   const d = dmgInd[dmgK];
@@ -917,8 +937,10 @@ function throwGrenade() {
   v.y += 3.6;
   gren.list.push({ mesh, p, v, fuse: 2.6, clinkT: -1, warnT: 0.4, seen: new Set() });
   SFX.play('whiz', 0.35, 0.55);
+  if (coop.on && coop.started) coopSendGren(p, v, coop.pid);
 }
-function explode(x, y, z) {
+// ghost: 다른 플레이어가 던진 수류탄. 연출만 하고 피해는 던진 사람의 폰이 계산한다
+function explode(x, y, z, ghost) {
   sparks.emit(x, y + 0.5, z, 0, 0.5, 0, 0.14, 3.2, 1, 0.85, 0.55, 1, 0, 0, 6);
   for (let i = 0; i < 26; i++) sparks.emit(x, y + 0.2, z, rr(-7, 7), rr(1, 9), rr(-7, 7), rr(0.22, 0.55), rr(0.5, 1.1), 1, rr(0.45, 0.7), 0.18, 0.9, -1, 3.5, 1.6);
   for (let i = 0; i < 16; i++) dust.emit(x + rr(-0.4, 0.4), y + 0.3, z + rr(-0.4, 0.4), rr(-2.5, 2.5), rr(1.5, 5), rr(-2.5, 2.5), rr(1.3, 2.6), rr(0.5, 1.0), 0.16, 0.15, 0.14, 0.55, -0.5, 1.7, 1.5);
@@ -930,6 +952,7 @@ function explode(x, y, z) {
   const c = camera.position, dp = Math.hypot(c.x - x, c.y - y, c.z - z);
   cam.shake = Math.max(cam.shake, clamp(1.7 - dp / 13, 0, 1.5));
   SFX.playAt('boom', x, y, z, 1.7, rr(0.9, 1.05));
+  if (ghost) return;
   let hits = 0, kills = 0;
   for (const e of enemies) {
     if (e.dead) continue;
@@ -946,7 +969,7 @@ function explode(x, y, z) {
     SFX.play('hit', 0.5);
   }
   if (dp < 7.5 && player.alive) hurtPlayer(110 * (1 - dp / 7.5) * (losClear(x, y + 0.35, z, c.x, c.y - 0.3, c.z) ? 1 : 0.25), { x, z });
-  for (const e of enemies) if (!e.dead) e.lastKnown.copy(player.pos);
+  for (const e of enemies) if (!e.dead && !e.puppet) e.lastKnown.copy(player.pos);
 }
 function updateGrenades(dt) {
   for (let i = gren.list.length - 1; i >= 0; i--) {
@@ -982,13 +1005,13 @@ function updateGrenades(dt) {
     if (g.warnT <= 0 && g.fuse < 1.3) {
       g.warnT = 0.25;
       for (const e of enemies) {
-        if (e.dead || g.seen.has(e) || Math.hypot(e.pos.x - g.p.x, e.pos.z - g.p.z) > 6.5 || !losClear(e.pos.x, 1.6, e.pos.z, g.p.x, g.p.y + 0.2, g.p.z)) continue;
+        if (e.dead || e.puppet || g.seen.has(e) || Math.hypot(e.pos.x - g.p.x, e.pos.z - g.p.z) > 6.5 || !losClear(e.pos.x, 1.6, e.pos.z, g.p.x, g.p.y + 0.2, g.p.z)) continue;
         g.seen.add(e);
         if (Math.random() < (e.T.key === 'heavy' ? 0.35 : 0.65)) e.fleeFrom(g.p);
       }
     }
     if (g.fuse <= 0) {
-      explode(g.p.x, g.p.y, g.p.z);
+      explode(g.p.x, g.p.y, g.p.z, g.ghost);
       scene.remove(g.mesh);
       gren.list.splice(i, 1);
     }
@@ -996,9 +1019,11 @@ function updateGrenades(dt) {
 }
 
 class Enemy {
-  constructor(x, z, type) {
+  // nid: 협동에서 방장이 매기는 번호. 참가자 화면의 적(puppet)은 AI 없이 방장이 보낸 상태를 따라 움직인다
+  constructor(x, z, type, nid = 0) {
     const T = (this.T = TYPES[type] || TYPES.rifle);
-    try { this.body = MOCAP.ready ? new MocapBody(T.key === 'rifle' && Math.random() < 0.5 ? 'rifle2' : T.mat, T.scale) : new PuppetBody(T.puppet); }
+    this.nid = nid; this.puppet = false; this.net = null; this.hitN = 0;
+    try { this.body = MOCAP.ready ? new MocapBody(T.key === 'rifle' && (nid ? nid % 2 === 0 : Math.random() < 0.5) ? 'rifle2' : T.mat, T.scale) : new PuppetBody(T.puppet); }
     catch (err) { this.body = new PuppetBody(T.puppet); }
     scene.add(this.body.root);
     this.pos = new THREE.Vector3(x, 0, z);
@@ -1087,7 +1112,7 @@ class Enemy {
   }
   // 가까운 표적 고르기: 플레이어를 조금 더 우선한다
   pickTarget() {
-    let best = player, bs = player.alive ? Math.hypot(player.pos.x - this.pos.x, player.pos.z - this.pos.z) * 0.8 : 1e9;
+    let best = player, bs = player.alive ? Math.hypot(player.pos.x - this.pos.x, player.pos.z - this.pos.z) * (coop.on ? 1 : 0.8) : 1e9;
     for (const a of allies) {
       if (!a.alive) continue;
       const sc = Math.hypot(a.pos.x - this.pos.x, a.pos.z - this.pos.z) - (this.tg === a ? 4 : 0);
@@ -1108,26 +1133,29 @@ class Enemy {
     let tEnd = 170, world = false, nx = 0, ny = 0, nz = 0, mat = 0;
     if (rayWorld(ox, oy, oz, _d.x, _d.y, _d.z, 170)) { tEnd = hit.t; world = true; nx = hit.nx; ny = hit.ny; nz = hit.nz; mat = hit.m; }
     const tp = rayPlayer(ox, oy, oz, _d, tEnd);
-    const mx = ox + Math.sin(this.aimYaw) * 0.85, mz = oz + Math.cos(this.aimYaw) * 0.85, my = 1.47 - drop;
     let hitAlly = null, tA = tp >= 0 ? tp : tEnd; // 탄 경로에 아군이 먼저 있으면 아군이 맞는다
     for (const a of allies) { if (a.gone) continue; const t = rayAlly(a, ox, oy, oz, _d, tA); if (t >= 0) { tA = t; hitAlly = a; } }
+    let fl = 0; // 1: 지형에 맞음, 2: 사람이 맞음 (참가자 화면 표시용)
     if (hitAlly) {
       tEnd = tA;
-      hitAlly.hurt(rr(T.dmg[0], T.dmg[1]), this);
+      fl = 2;
+      hitAlly.hurt(rr(T.dmg[0], T.dmg[1]) * (hitAlly.net && !T.sniper && dist > 45 ? 0.75 : 1), this);
     } else if (tp >= 0) {
       tEnd = tp;
+      fl = 2;
       hurtPlayer(rr(T.dmg[0], T.dmg[1]) * (!T.sniper && dist > 45 ? 0.75 : 1), this.pos);
     } else {
-      if (world) impactFx(ox + _d.x * tEnd, oy + _d.y * tEnd, oz + _d.z * tEnd, nx, ny, nz, mat, 0.55);
-      // 근접 통과음
-      _v.subVectors(camera.position, _w.set(ox, oy, oz));
-      const tca = _v.dot(_d);
-      if (tca > 2 && tca < tEnd && _v.lengthSq() - tca * tca < 1.6 && game.time - whizT > 0.12) {
-        whizT = game.time;
-        SFX.play('whiz', 0.5, rr(0.85, 1.2), (Math.random() < 0.5 ? -1 : 1) * rr(0.3, 0.8));
-      }
+      if (world) { fl = 1; impactFx(ox + _d.x * tEnd, oy + _d.y * tEnd, oz + _d.z * tEnd, nx, ny, nz, mat, 0.55); }
+      whizNear(ox, oy, oz, _d, tEnd);
     }
-    tracers.spawn(mx, my, mz, ox + _d.x * tEnd, oy + _d.y * tEnd, oz + _d.z * tEnd);
+    const ex = ox + _d.x * tEnd, ey = oy + _d.y * tEnd, ez = oz + _d.z * tEnd;
+    this.shotFx(ex, ey, ez);
+    if (coop.host && coop.shots.length < 48) coop.shots.push([this.nid, Math.round(ex * 10), Math.round(ey * 10), Math.round(ez * 10), fl]);
+  }
+  // 총구 화염·예광탄·총성. 참가자 화면에서는 방장이 알려 준 탄착점으로 그린다
+  shotFx(ex, ey, ez) {
+    const T = this.T, drop = this.crouch * 0.37, mx = this.pos.x + Math.sin(this.aimYaw) * 0.85, mz = this.pos.z + Math.cos(this.aimYaw) * 0.85, my = 1.47 - drop;
+    tracers.spawn(mx, my, mz, ex, ey, ez);
     this.flashT = 0.05;
     this.kick = 1;
     this.body.flash.rotation.z = Math.random() * TAU;
@@ -1137,6 +1165,15 @@ class Enemy {
   damage(d, part, dir, power, blast, src) {
     if (this.dead) return false;
     const T = this.T;
+    if (this.puppet) { // 참가자: 명중을 방장에 보고하고, 움찔하는 반응만 미리 보여 준다. 사살 여부는 방장이 알려 준다
+      coopSendHit(this, d, part, dir, power, blast);
+      this.flinch = Math.max(this.flinch, T.flinch);
+      this.flinchSide = Math.random() < 0.5 ? -1 : 1;
+      this.localHitT = game.time;
+      if (this.body.playOver && !blast) this.body.playOver(part === 2 ? 'HitHead' : 'HitChest', { peak: T.flinch >= 1 ? 1 : 0.45 });
+      return false;
+    }
+    this.hitN = (this.hitN + 1) & 15;
     this.hp -= d;
     this.flinch = Math.max(this.flinch, T.flinch);
     this.flinchSide = Math.random() < 0.5 ? -1 : 1;
@@ -1161,7 +1198,8 @@ class Enemy {
     if (this.hp <= 0) { this.die(dir, part, power, blast, src); return true; }
     return false;
   }
-  die(dir, part, power, blast, src) {
+  // 쓰러지는 연출. clip: 쓸 죽음 클립(없으면 래그돌). 참가자 화면에서는 방장이 고른 값을 그대로 쓴다
+  kill(dir, part, power, blast, clip) {
     const T = this.T;
     this.dead = true;
     this.deadT = 0;
@@ -1169,17 +1207,25 @@ class Enemy {
     if (!(part === 2 && !blast) || Math.random() < 0.3) SFX.playAt('grunt', this.pos.x, 1.5, this.pos.z, 0.9, rr(0.92, 1.05) * (T.key === 'heavy' ? 0.86 : 1));
     if (this.laser) { scene.remove(this.laser); this.laser = null; }
     this.fall = dir && Math.sin(this.bodyYaw) * dir.x + Math.cos(this.bodyYaw) * dir.z > 0 ? 1 : -1;
+    this.fallSnd = clip === 'Death' ? 0.95 : clip === 'Knockback' ? 0.35 : blast ? 0.8 : 0.5;
+    this.deathKind = clip || 'ragdoll';
+    this.body.die(this, scene, { dir: dir ? { x: dir.x, y: dir.y, z: dir.z } : null, power: power || 3, part, blast: blast || null, clip });
+  }
+  die(dir, part, power, blast, src) {
+    const T = this.T;
     let clip = null;
     if (!blast && dir && part !== 2 && MOCAP.clips && MOCAP.clips.Death && this.body.playOver && this.crouch < 0.4 && !(this.rollT > 0) && Math.random() < 0.6) {
       // 클립은 뒤로 쓰러진다: 탄이 미는 방향과 비슷하고 그쪽이 비어 있을 때만 쓴다
       const a = this.bodyYaw + MOCAP.deathYaw, fx = Math.sin(a), fz = Math.cos(a), dl = Math.hypot(dir.x, dir.z) || 1;
       if ((fx * dir.x + fz * dir.z) / dl > 0.3 && !rayWorld(this.pos.x, 0.45, this.pos.z, fx, 0, fz, 2.3, false) && !rayWorld(this.pos.x, 1.2, this.pos.z, fx, 0, fz, 1.6, false)) clip = (power || 3) >= 5 ? 'Knockback' : 'Death';
     }
-    this.fallSnd = clip === 'Death' ? 0.95 : clip === 'Knockback' ? 0.35 : blast ? 0.8 : 0.5;
-    this.deathKind = clip || 'ragdoll';
-    this.body.die(this, scene, { dir: dir ? { x: dir.x, y: dir.y, z: dir.z } : null, power: power || 3, part, blast: blast || null, clip });
+    this.kill(dir, part, power, blast, clip);
     const head = part === 2 && !blast, pts = T.score + (head ? 50 : 0);
-    if (src) { // 팀원이 잡은 적
+    if (src && src.net) { // 협동: 다른 플레이어가 잡은 적. 점수는 팀이 함께 쌓는다
+      src.kills++;
+      game.score += pts;
+      feed(`${src.def.name} · ${T.label}`);
+    } else if (src) { // 팀원이 잡은 적
       game.teamKills++;
       feed(`${src.def.short} · ${T.label}`);
     } else {
@@ -1188,9 +1234,9 @@ class Enemy {
       if (head) game.headshots++;
       feed(head ? `헤드샷 +${pts}` : `${T.label} +${pts}`, head);
     }
-    const rn = Math.random();
-    if (rn < 0.38) addPickup('ammo', this.pos.x, this.pos.z);
-    else if (rn < 0.38 + (player.hp < 60 ? 0.3 : 0.1)) addPickup('med', this.pos.x, this.pos.z);
+    const rn = Math.random(), drop = rn < 0.38 ? 'ammo' : rn < 0.38 + (player.hp < 60 ? 0.3 : 0.1) ? 'med' : '';
+    if (drop) addPickup(drop, this.pos.x, this.pos.z);
+    if (coop.host) coopSendDie(this, part, dir, power, blast, clip, src && src.net ? src.pid : 0, drop, head);
   }
   update(dt) {
     if (this.dead) {
@@ -1199,6 +1245,7 @@ class Enemy {
       if (this.body.animateDead(this, dt)) this.remove();
       return;
     }
+    if (this.puppet) { this.updatePuppet(dt); return; }
     this.tgT -= dt;
     if (this.tgT <= 0 || (this.tg !== player && !this.tg.alive)) { this.tgT = rr(1.2, 2); this.pickTarget(); }
     const T = this.T, P = this.tg, px = P.pos.x, pz = P.pos.z, dP = Math.hypot(px - this.pos.x, pz - this.pos.z), drop = this.crouch * 0.37, run = runSpeed() * T.speed;
@@ -1327,6 +1374,11 @@ class Enemy {
     if (combat) ta = Math.atan2(this.lastKnown.x - this.pos.x, this.lastKnown.z - this.pos.z);
     else if (mv > 0.3) ta = Math.atan2(this.vx, this.vz);
     this.aimYaw += clamp(angDiff(this.aimYaw, ta), -6.5 * dt, 6.5 * dt);
+    this.present(dt, combat, mv, combat && mv < 0.5 && (this.reload > 0 || (this.kneel && this.canSee)), P, dP);
+  }
+  // 몸 방향·자세·발소리·애니메이션·조준선. AI(방장)와 꼭두각시(참가자)가 함께 쓴다
+  present(dt, combat, mv, wantCrouch, P, dP) {
+    const T = this.T, drop = this.crouch * 0.37;
     let tb = this.aimYaw, back = false;
     if (mv > 0.6) {
       const md = Math.atan2(this.vx, this.vz);
@@ -1337,8 +1389,7 @@ class Enemy {
     this.back = back;
     this.bodyYaw += clamp(angDiff(this.bodyYaw, tb), -9 * dt, 9 * dt);
     this.aim = damp(this.aim, combat ? 1 : 0, 7, dt);
-    if (this.canSee) this.aimPitch = clamp(Math.atan2(P.pos.y + P.eye * 0.72 - (1.48 - drop), Math.max(dP, 1)), -0.6, 0.6);
-    const wantCrouch = combat && mv < 0.5 && (this.reload > 0 || (this.kneel && this.canSee));
+    if (this.canSee && P) this.aimPitch = clamp(Math.atan2(P.pos.y + P.eye * 0.72 - (1.48 - drop), Math.max(dP, 1)), -0.6, 0.6);
     this.crouch = damp(this.crouch, wantCrouch ? 1 : 0, 6, dt);
     this.flinch = damp(this.flinch, 0, 9, dt);
     this.flashT -= dt;
@@ -1346,15 +1397,14 @@ class Enemy {
       this.stepAcc = (this.stepAcc || 0) + mv * dt;
       if (this.stepAcc > (mv > 3 ? 1.75 : 1.35)) {
         this.stepAcc = 0;
-        if (dP < 30) SFX.playAt('step', this.pos.x, 0.1, this.pos.z, T.key === 'heavy' ? 1.5 : 1.0, T.key === 'heavy' ? 0.84 : rr(0.95, 1.1));
+        if (Math.hypot(this.pos.x - player.pos.x, this.pos.z - player.pos.z) < 30) SFX.playAt('step', this.pos.x, 0.1, this.pos.z, T.key === 'heavy' ? 1.5 : 1.0, T.key === 'heavy' ? 0.84 : rr(0.95, 1.1));
       }
     }
     this.body.animate(this, dt);
 
     if (this.laser) {
-      // 조준점은 플레이어를 조금 늦게 따라온다: 옆으로 계속 움직이면 빗나간다
-      const ty = P.pos.y + P.eye * 0.72;
-      if (this.canSee) { this.aimPt.x = damp(this.aimPt.x, px, 3.2, dt); this.aimPt.y = damp(this.aimPt.y, ty, 3.2, dt); this.aimPt.z = damp(this.aimPt.z, pz, 3.2, dt); }
+      // 조준점은 표적을 조금 늦게 따라온다: 옆으로 계속 움직이면 빗나간다
+      if (this.canSee && P) { const ty = P.pos.y + P.eye * 0.72; this.aimPt.x = damp(this.aimPt.x, P.pos.x, 3.2, dt); this.aimPt.y = damp(this.aimPt.y, ty, 3.2, dt); this.aimPt.z = damp(this.aimPt.z, P.pos.z, 3.2, dt); }
       const on = this.aimT > 0.15;
       this.laser.visible = on;
       if (on) {
@@ -1369,6 +1419,42 @@ class Enemy {
       }
     }
   }
+  // 참가자 화면의 적: 방장이 보낸 상태를 조금 늦춰 부드럽게 따라간다
+  updatePuppet(dt) {
+    const n = this.net, s = sampleAt(n.buf, netNow() - 0.12), x0 = this.pos.x, z0 = this.pos.z;
+    if (s) {
+      const a = s.a, b = s.b, k = s.k;
+      this.pos.x = lerp(a.x, b.x, k);
+      this.pos.z = lerp(a.z, b.z, k);
+      this.aimYaw = a.yaw + angDiff(a.yaw, b.yaw) * k;
+      n.fl = b.fl;
+    }
+    const fl = n.fl | 0, ivx = (this.pos.x - x0) / dt, ivz = (this.pos.z - z0) / dt;
+    this.vx = damp(this.vx, ivx, 10, dt);
+    this.vz = damp(this.vz, ivz, 10, dt);
+    this.speed = damp(this.speed, Math.hypot(ivx, ivz), 10, dt);
+    this.kick = damp(this.kick, 0, 22, dt);
+    if (fl & 4) { // 구르기 시작
+      if (!n.roll && this.body.playOver && MOCAP.clips && MOCAP.clips.Roll) {
+        const mv0 = Math.hypot(this.vx, this.vz) || 1;
+        this.body.playOver('Roll', { full: true, rate: 1.25, tin: 0.1, tout: 0.2, force: true });
+        this.rollT = 1.47 / 1.25; this.rollX = this.vx / mv0; this.rollZ = this.vz / mv0;
+      }
+      n.roll = true;
+    } else n.roll = false;
+    if (this.rollT > 0) this.rollT -= dt;
+    const hn = (fl >> 7) & 15; // 다른 사람이 맞힌 반응
+    if (n.hitN !== undefined && hn !== n.hitN && game.time - (this.localHitT || -9) > 0.35) {
+      this.flinch = Math.max(this.flinch, this.T.flinch);
+      if (this.body.playOver) this.body.playOver('HitChest', { peak: this.T.flinch >= 1 ? 1 : 0.45 });
+    }
+    n.hitN = hn;
+    const P = coopEntity((fl >> 5) & 3), dP = P ? Math.hypot(P.pos.x - this.pos.x, P.pos.z - this.pos.z) : 30;
+    this.tg = P || player;
+    this.canSee = !!(fl & 16);
+    this.aimT = fl & 8 ? 1 : 0;
+    this.present(dt, !!(fl & 2), Math.hypot(this.vx, this.vz), !!(fl & 1), P, dP);
+  }
 }
 
 function pickType() {
@@ -1381,19 +1467,25 @@ function pickType() {
 }
 
 function spawnEnemy(fx, fz, type) {
-  if (fx !== undefined) { const e = new Enemy(fx, fz, type || 'rifle'); enemies.push(e); return e; }
-  const kind = pickType();
+  const nid = coop.host ? ++coop.nextId : 0;
+  if (fx !== undefined) { const e = new Enemy(fx, fz, type || 'rifle', nid); enemies.push(e); return e; }
+  const kind = pickType(), hs = humans();
   let best = -1, bs = -1e9;
   for (let k = 0; k < 26; k++) {
-    const c = NAV.free[(Math.random() * NAV.free.length) | 0], x = cellX(c), z = cellZ(c), d = Math.hypot(x - player.pos.x, z - player.pos.z);
+    const c = NAV.free[(Math.random() * NAV.free.length) | 0], x = cellX(c), z = cellZ(c);
+    let d = 1e9, seen = false; // 가장 가까운 사람까지의 거리, 누구에게든 보이는 자리인가
+    for (const h of hs) {
+      d = Math.min(d, Math.hypot(x - h.pos.x, z - h.pos.z));
+      if (!seen && losClear(x, 1.7, z, h.pos.x, h.pos.y + h.eye, h.pos.z)) seen = true;
+    }
     if (d < 24) continue;
     let s = Math.min(d, 46) + Math.random() * 6;
-    if (losClear(x, 1.7, z, player.pos.x, player.pos.y + player.eye, player.pos.z)) s -= 40;
+    if (seen) s -= 40;
     for (const e of enemies) if (!e.dead && Math.hypot(e.pos.x - x, e.pos.z - z) < 3) s -= 20;
     if (s > bs) { bs = s; best = c; }
   }
   if (best < 0) { game.queue.unshift(kind); return null; }
-  const e = new Enemy(cellX(best), cellZ(best), kind);
+  const e = new Enemy(cellX(best), cellZ(best), kind, nid);
   enemies.push(e);
   return e;
 }
@@ -1413,7 +1505,7 @@ function rayAlly(a, ox, oy, oz, d, maxT) {
   const b = ex * d.x + ez * d.z, disc = b * b - q * (ex * ex + ez * ez - 0.1);
   if (disc < 0) return -1;
   const t = (-b - Math.sqrt(disc)) / q, y = oy + d.y * t;
-  return t > 0 && t < maxT && y >= 0 && y <= 1.78 - a.crouch * 0.5 ? t : -1;
+  return t > 0 && t < maxT && y >= a.pos.y && y <= a.pos.y + 1.78 - a.crouch * 0.5 ? t : -1;
 }
 const snapFree = (p) => (blockedAt(p.x, p.z) ? cellNear(p.x, p.z, 3.5) || { x: p.x, z: p.z } : { x: p.x, z: p.z });
 class Ally {
@@ -1724,6 +1816,549 @@ function clearSquad() {
   el.radio.classList.add('hidden');
 }
 
+// ───────────────────────── 협동 생존(네트워크)
+// 방장(번호 0)의 폰이 적 AI와 웨이브를 계산한다. 참가자는 자기 캐릭터만 직접 움직이고, 적은 방장이 보낸 상태로 그린다.
+//  - 상태(초당 12~15회, 잃어도 되는 값): 플레이어 위치·방향, 적 위치·자세, 적의 사격 표시
+//  - 사건(순서와 도착 보장): 입장·시작·웨이브·명중 보고·사살·피해·종료
+const COOP_RESPAWN = 10; // 쓰러진 뒤 복귀까지(초)
+const COOP_SPAWN = [[0, 0], [1.6, 0.8], [-1.6, 0.8], [0, 2]]; // 출발 지점 기준 자리 [x, z]
+const TYPE_KEYS = Object.keys(TYPES);
+const netNow = () => performance.now() / 1000;
+const r2 = (v) => Math.round(v * 100) / 100, r3 = (v) => Math.round(v * 1000) / 1000;
+// 받은 표본을 조금 늦춰 두 표본 사이를 잇는다 (받은 시각 기준)
+const _smp = { a: null, b: null, k: 0 };
+function pushSample(buf, s) {
+  s.t = netNow();
+  buf.push(s);
+  if (buf.length > 16) buf.shift();
+}
+function sampleAt(buf, t) {
+  let i = buf.length - 1;
+  if (i < 0) return null;
+  if (t >= buf[i].t) { _smp.a = _smp.b = buf[i]; _smp.k = 0; return _smp; }
+  while (i > 0 && buf[i - 1].t > t) i--;
+  if (i === 0) { _smp.a = _smp.b = buf[0]; _smp.k = 0; return _smp; }
+  _smp.a = buf[i - 1]; _smp.b = buf[i]; _smp.k = (t - _smp.a.t) / Math.max(1e-4, _smp.b.t - _smp.a.t);
+  return _smp;
+}
+
+// 다른 사람이 조종하는 플레이어. 적이 조준할 수 있도록 allies 목록에 함께 넣는다(Ally와 같은 모양)
+class RemotePlayer {
+  constructor(pid) {
+    this.net = true; this.pid = pid;
+    const name = COOP_NAMES[pid] || '대원';
+    this.def = { id: 'p' + pid, name, short: name, hp: 100, mat: 'ally' };
+    try { this.body = MOCAP.ready ? new MocapBody(this.def.mat, 1) : new PuppetBody(0); }
+    catch (err) { this.body = new PuppetBody(0); }
+    scene.add(this.body.root);
+    const o = COOP_SPAWN[pid] || COOP_SPAWN[0];
+    this.pos = new THREE.Vector3(START.x + o[0], 0, START.z + o[1]);
+    this.eye = 1.62; this.hspeed = 0; this.yaw = 0; this.elev = 0;
+    this.aimYaw = this.bodyYaw = Math.PI; this.back = false; this.vx = 0; this.vz = 0; this.speed = 0; this.crouch = 0; this.kick = 0; this.flinch = 0; this.flinchSide = 1; this.aim = 1; this.aimPitch = 0; this.flashT = 0;
+    this.hp = 100; this.up = true; this.crouchF = false; this.widx = 0; this.gone = false; this.state = 'follow';
+    this.buf = []; this.raw = null; this.seq = -1; this.shotN = -1; this.pend = 0; this.shotCd = 0; this.kills = 0; this.stepAcc = 0;
+    let slot = 0;
+    while (allies.some((a) => !a.gone && a.slot === slot)) slot++;
+    this.slot = slot;
+    this.tag = el.tags.children[slot % el.tags.children.length];
+    this.tag.textContent = name;
+    this.body.animate(this, 0.016);
+  }
+  get alive() { return !this.gone && this.up; }
+  remove() {
+    this.body.dispose(scene);
+    this.gone = true;
+    this.tag.classList.add('hidden');
+  }
+  // p: [번호, x, y, z, 좌우 각, 상하 각, 플래그(1 앉음, 2 살아 있음, 4 정조준), 무기, 체력, 사격 횟수]
+  push(p) {
+    this.raw = p;
+    pushSample(this.buf, { x: p[1], y: p[2], z: p[3], yaw: p[4], pitch: p[5] });
+    const up = !!(p[6] & 2);
+    this.crouchF = !!(p[6] & 1);
+    this.widx = p[7];
+    this.hp = p[8];
+    if (up !== this.up) { this.up = up; feed(up ? `${this.def.name} 복귀` : `${this.def.name} 쓰러짐`); }
+    if (this.shotN >= 0) this.pend = Math.min(6, this.pend + ((p[9] - this.shotN) & 255));
+    this.shotN = p[9];
+  }
+  // 방장: 적의 탄이 이 플레이어에게 맞았다 → 그 사람의 폰에 알린다
+  hurt(dmg, enemy) {
+    if (!this.alive) return;
+    this.flinch = 1;
+    this.flinchSide = Math.random() < 0.5 ? -1 : 1;
+    if (this.body.playOver) this.body.playOver('HitChest', { peak: 0.7 });
+    if (coop.host) coopSendHurt(this.pid, dmg, enemy.pos);
+  }
+  shotFx() {
+    const w = W[ORDER[this.widx]] || W.ar, drop = this.crouch * 0.37, cp = Math.cos(this.aimPitch);
+    const dx = Math.sin(this.aimYaw) * cp, dy = Math.sin(this.aimPitch), dz = Math.cos(this.aimYaw) * cp;
+    const ox = this.pos.x, oy = this.pos.y + 1.5 - drop, oz = this.pos.z, t = rayWorld(ox, oy, oz, dx, dy, dz, 90) ? hit.t : 90;
+    const mx = ox + Math.sin(this.aimYaw) * 0.85, mz = oz + Math.cos(this.aimYaw) * 0.85, my = this.pos.y + 1.47 - drop;
+    tracers.spawn(mx, my, mz, ox + dx * t, oy + dy * t, oz + dz * t);
+    this.flashT = 0.05;
+    this.kick = 1;
+    this.body.flash.rotation.z = Math.random() * TAU;
+    SFX.playAt(w.sound, mx, my, mz, 0.8, rr(0.96, 1.04));
+  }
+  update(dt) {
+    const s = sampleAt(this.buf, netNow() - 0.1), x0 = this.pos.x, z0 = this.pos.z;
+    if (s) {
+      const a = s.a, b = s.b, k = s.k;
+      if (Math.hypot(b.x - a.x, b.z - a.z) > 6) this.pos.set(b.x, b.y, b.z); // 복귀 같은 순간 이동은 잇지 않는다
+      else this.pos.set(lerp(a.x, b.x, k), lerp(a.y, b.y, k), lerp(a.z, b.z, k));
+      this.yaw = a.yaw + angDiff(a.yaw, b.yaw) * k;
+      this.aimPitch = clamp(lerp(a.pitch, b.pitch, k), -1.2, 1.2);
+    }
+    const jump = Math.hypot(this.pos.x - x0, this.pos.z - z0) > 3, ivx = jump ? 0 : (this.pos.x - x0) / dt, ivz = jump ? 0 : (this.pos.z - z0) / dt;
+    this.vx = damp(this.vx, ivx, 12, dt);
+    this.vz = damp(this.vz, ivz, 12, dt);
+    this.speed = damp(this.speed, Math.hypot(ivx, ivz), 10, dt);
+    this.hspeed = this.speed;
+    this.elev = this.pos.y;
+    this.aimYaw = this.yaw + Math.PI;
+    const mv = Math.hypot(this.vx, this.vz);
+    let tb = this.aimYaw, back = false;
+    if (mv > 0.6) {
+      const md = Math.atan2(this.vx, this.vz);
+      if (Math.abs(angDiff(md, this.aimYaw)) <= (this.back ? 1.4 : 1.75)) tb = md;
+      else { tb = md + Math.PI; back = true; }
+    }
+    this.back = back;
+    this.bodyYaw += clamp(angDiff(this.bodyYaw, tb), -10 * dt, 10 * dt);
+    this.aim = damp(this.aim, this.up ? 1 : 0, 7, dt);
+    this.crouch = damp(this.crouch, !this.up || this.crouchF ? 1 : 0, 7, dt);
+    this.eye = lerp(1.62, 1.02, this.crouch);
+    this.kick = damp(this.kick, 0, 22, dt);
+    this.flinch = damp(this.flinch, 0, 9, dt);
+    this.flashT -= dt;
+    this.state = this.up ? 'follow' : 'down';
+    this.shotCd -= dt;
+    if (this.pend > 0 && this.shotCd <= 0) { this.pend--; this.shotCd = 0.085; if (this.up) this.shotFx(); }
+    if (mv > 0.8 && this.up) {
+      this.stepAcc += mv * dt;
+      if (this.stepAcc > (mv > 3 ? 1.75 : 1.35)) { this.stepAcc = 0; if (Math.hypot(this.pos.x - player.pos.x, this.pos.z - player.pos.z) < 30) SFX.playAt('step', this.pos.x, this.pos.y + 0.1, this.pos.z, 0.8, rr(0.95, 1.1)); }
+    }
+    this.body.animate(this, dt);
+  }
+}
+const coopEntity = (pid) => (pid === coop.pid ? player : coop.players.get(pid) || null);
+function coopAddRemote(pid) {
+  if (pid === coop.pid || coop.players.has(pid)) return;
+  const r = new RemotePlayer(pid);
+  coop.players.set(pid, r);
+  allies.push(r);
+}
+function coopRemoveRemote(pid) {
+  const r = coop.players.get(pid);
+  if (!r) return;
+  r.remove();
+  coop.players.delete(pid);
+}
+const coopMyState = () => [coop.pid, r2(player.pos.x), r2(player.pos.y), r2(player.pos.z), r3(player.yaw), r3(player.pitch), (player.crouch ? 1 : 0) | (player.alive ? 2 : 0) | (vm.adsT > 0.5 ? 4 : 0), Math.max(0, ORDER.indexOf(vm.cur)), Math.max(0, Math.round(player.hp)), coop.myShots];
+
+// ── 보내기
+function coopSendSnapshot() { // 방장 → 참가자: 웨이브 정보, 모든 플레이어, 살아 있는 적, 그동안의 적 사격
+  const pl = [coopMyState()], en = [];
+  for (const r of coop.players.values()) if (r.raw) pl.push(r.raw);
+  for (const e of enemies) {
+    if (e.dead || !e.nid) continue;
+    const tp = e.tg && e.tg.net ? e.tg.pid : 0;
+    const fl = (e.crouch > 0.5 ? 1 : 0) | (e.state === 'combat' && e.fleeT <= 0 ? 2 : 0) | (e.rollT > 0 ? 4 : 0) | (e.aimT > 0.15 ? 8 : 0) | (e.canSee ? 16 : 0) | ((tp & 3) << 5) | (e.hitN << 7);
+    en.push([e.nid, TYPE_KEYS.indexOf(e.T.key), Math.round(e.pos.x * 100), Math.round(e.pos.z * 100), Math.round(e.aimYaw * 100), fl]);
+  }
+  sendSt(['s', ++coop.seq, [game.wave, game.toSpawn, game.score, coop.gen], pl, en, coop.shots]);
+  coop.shots = [];
+}
+function coopSendHit(e, d, part, dir, power, blast) { // 참가자 → 방장: 내 탄이 적에게 맞았다
+  sendEv({ t: 'hit', i: e.nid, d: r2(d), p: part, v: dir ? [r2(dir.x), r2(dir.y), r2(dir.z)] : 0, w: power || 0, b: blast ? [r2(blast.x), r2(blast.y), r2(blast.z), r2(blast.power)] : 0 });
+}
+function coopSendDie(e, part, dir, power, blast, clip, by, drop, head) { // 방장 → 참가자: 적이 쓰러졌다
+  sendEv({ t: 'die', i: e.nid, p: part, v: dir ? [r2(dir.x), r2(dir.y), r2(dir.z)] : 0, w: power || 3, b: blast ? [r2(blast.x), r2(blast.y), r2(blast.z), r2(blast.power)] : 0, c: clip || 0, by, dr: drop === 'ammo' ? 1 : drop === 'med' ? 2 : 0, h: head ? 1 : 0 });
+}
+function coopSendHurt(pid, dmg, pos) {
+  const link = NET.links.find((l) => l.pid === pid);
+  if (link) sendEv({ t: 'hurt', d: r2(dmg), x: r2(pos.x), z: r2(pos.z) }, link);
+}
+function coopSendGren(p, v, by) {
+  const m = { t: 'gren', p: [r2(p.x), r2(p.y), r2(p.z)], v: [r2(v.x), r2(v.y), r2(v.z)], by };
+  if (coop.host) { for (const l of NET.links) if (l.pid !== by) sendEv(m, l); }
+  else sendEv(m);
+}
+function coopGhostGrenade(m) { // 다른 플레이어가 던진 수류탄: 날아가고 터지는 모습만
+  const mesh = new THREE.Mesh(grenGeo, grenMat);
+  mesh.castShadow = true;
+  scene.add(mesh);
+  gren.list.push({ mesh, p: new THREE.Vector3(m.p[0], m.p[1], m.p[2]), v: new THREE.Vector3(m.v[0], m.v[1], m.v[2]), fuse: 2.6, clinkT: -1, warnT: 0.4, seen: new Set(), ghost: true });
+}
+function coopPicked(pid) { // 보급을 고름. 방장은 모두 골랐으면 다음 웨이브를 앞당긴다
+  if (!coop.host) { sendEv({ t: 'pick' }); return; }
+  coop.picked.add(pid);
+  let all = player.alive ? coop.picked.has(0) : true;
+  for (const r of coop.players.values()) if (r.alive && !coop.picked.has(r.pid)) all = false;
+  if (all && game.between > 3) game.between = 3;
+}
+
+// ── 흐름
+function coopRespawn() {
+  const o = COOP_SPAWN[coop.pid] || COOP_SPAWN[0];
+  player.pos.set(START.x + o[0], 0, START.z + o[1]);
+  player.vel.set(0, 0, 0);
+  player.hp = prog.maxHp; player.alive = true; player.crouch = false; player.lastHurt = game.time; player.grounded = true; player.col.grounded = true; player.yOff = 0;
+  cam.roll = 0; cam.hurtRoll = 0;
+  coop.safeT = 2.5; coop.downSec = -1;
+  const w = W[vm.cur];
+  if (w.reserve !== Infinity && w.reserve < w.mag) giveAmmo();
+  setState('playing');
+  showMsg('복귀', '', 1.4);
+}
+function coopBegin(gen) { // 모든 폰에서 같은 판을 새로 시작한다. gen: 방장이 매긴 판 번호
+  coop.gen = gen;
+  coop.dead.clear();
+  SFX.initAudio();
+  SFX.setSound(opt.sound);
+  SFX.suspend(false);
+  camp.on = false;
+  showMarks([]);
+  clearSquad();
+  coop.players.clear();
+  coop.en.clear();
+  loadMap('yard', 'day');
+  resetGame();
+  Object.assign(coop, { started: true, shots: [], snapSeq: -1, lastSnap: netNow(), stall: false, supplyT: 0, allDownT: 0, downSec: -1, safeT: 2, myShots: 0, lost: '' });
+  coop.picked.clear();
+  for (const pid of coop.roster) coopAddRemote(pid);
+  const o = COOP_SPAWN[coop.pid] || COOP_SPAWN[0];
+  player.pos.set(START.x + o[0], 0, START.z + o[1]);
+  $('btnAgain').classList.remove('hidden');
+  setState('playing');
+  feed(`협동 생존 · ${nPlayers()}명`);
+}
+function coopHostStart() {
+  if (!coop.on || !coop.host || !NET.code) return;
+  const gen = coop.gen + 1;
+  sendEv({ t: 'go', g: gen });
+  coopBegin(gen);
+}
+function coopShowOver(eyebrow, m) {
+  coop.started = false;
+  const mine = m && m.k.find((q) => q[0] === coop.pid);
+  $('oWave').textContent = m ? m.w : game.wave;
+  $('oScore').textContent = m ? m.s : game.score;
+  $('oKills').textContent = mine ? mine[1] : game.kills;
+  $('oHead').textContent = game.headshots;
+  $('oAcc').textContent = (game.shots ? Math.round((game.hits / game.shots) * 100) : 0) + '%';
+  $('overEyebrow').textContent = eyebrow + (m ? ' · ' + m.k.map((q) => `${COOP_NAMES[q[0]]} ${q[1]}`).join(' / ') : '');
+  $('btnAgain').textContent = coop.lost ? '다시 참가' : '다시 시작';
+  $('btnAgain').classList.toggle('hidden', !coop.lost && !coop.host);
+  $('btnOverList').textContent = '방 나가기';
+  $('btnOverList').classList.remove('hidden');
+  $('overNote').textContent = coop.lost ? '' : coop.host ? '' : '방장이 다시 시작하면 이어집니다.';
+  setState('over');
+}
+function coopOver() { // 방장: 전원이 쓰러졌다
+  const k = [[0, game.kills]];
+  for (const r of coop.players.values()) k.push([r.pid, r.kills]);
+  const m = { t: 'over', w: game.wave, s: game.score, k };
+  sendEv(m);
+  coopShowOver('전원 쓰러짐', m);
+}
+function coopAgain() { // 종료 화면의 큰 버튼: 끊긴 참가자는 다시 참가, 방장은 다시 시작
+  if (coop.lost) coopJoin(coop.lost);
+  else coopHostStart();
+}
+function coopEnd() { // 방을 떠난다
+  netClose();
+  Object.assign(coop, { on: false, host: false, started: false, pid: 0, roster: [], lost: '', stall: false, gen: 0 });
+  coop.players.clear();
+  coop.en.clear();
+  $('btnAgain').classList.remove('hidden');
+  $('btnOverList').textContent = '작전 목록';
+  $('overNote').textContent = '';
+  $('btnQuit').textContent = '메뉴로';
+  $('btnRestart').classList.remove('hidden');
+  setTxt('hudVer', VERSION);
+}
+function coopUpdate(dt) {
+  if (coop.safeT > 0) coop.safeT -= dt;
+  const t = netNow();
+  if (coop.host) {
+    if (t - coop.lastSend >= 1 / 12) { coop.lastSend = t; coopSendSnapshot(); }
+    let anyUp = player.alive; // 전원이 동시에 쓰러져 있으면 끝
+    for (const r of coop.players.values()) if (r.alive) anyUp = true;
+    if (anyUp) coop.allDownT = 0;
+    else if ((coop.allDownT += dt) > 1.5) coopOver();
+    return;
+  }
+  if (t - coop.lastSend >= 1 / 15) { coop.lastSend = t; sendSt(['p', ++coop.seq, coopMyState()]); }
+  if (coop.supplyT > 0 && (coop.supplyT -= dt) <= 0 && player.alive && game.state === 'playing') openSupply();
+  const gap = t - coop.lastSnap;
+  if (gap > 2.5 && !coop.stall) { coop.stall = true; showMsg('방장 응답 없음', '방장 폰의 화면이 꺼졌거나 연결이 불안정합니다', 4); }
+  else if (gap < 1 && coop.stall) { coop.stall = false; showMsg('연결 회복', '', 1.5); }
+  // 한동안 소식이 없는 적은 지운다 (방장이 판을 다시 시작한 경우 등)
+  for (const [id, e] of coop.en) if (!e.dead && coop.snapSeq - e.net.seen > 30) { e.remove(); coop.en.delete(id); }
+}
+
+// ── 받기
+function coopOnState(link, m) {
+  if (!Array.isArray(m) || !coop.started) return;
+  if (coop.host) { // 참가자의 위치·자세
+    if (m[0] !== 'p' || !Array.isArray(m[2])) return;
+    const r = coop.players.get(link.pid);
+    if (!r || m[1] <= r.seq) return;
+    r.seq = m[1];
+    m[2][0] = link.pid;
+    r.push(m[2]);
+    return;
+  }
+  if (m[0] !== 's' || m[1] <= coop.snapSeq || m[2][3] !== coop.gen) return; // 뒤늦게 온 것, 지난 판의 것은 버린다
+  coop.snapSeq = m[1];
+  coop.lastSnap = netNow();
+  game.wave = m[2][0]; game.toSpawn = m[2][1]; game.score = m[2][2];
+  for (const p of m[3]) { const r = coop.players.get(p[0]); if (r) r.push(p); }
+  for (const q of m[4]) {
+    let e = coop.en.get(q[0]);
+    if (!e) {
+      if (coop.dead.has(q[0])) continue; // 쓰러졌다는 소식이 먼저 도착한 적
+      e = new Enemy(q[2] / 100, q[3] / 100, TYPE_KEYS[q[1]], q[0]);
+      e.puppet = true;
+      e.net = { buf: [], fl: q[5], seen: 0, roll: false };
+      e.aimYaw = e.bodyYaw = q[4] / 100;
+      enemies.push(e);
+      coop.en.set(q[0], e);
+    }
+    if (e.dead) continue;
+    pushSample(e.net.buf, { x: q[2] / 100, z: q[3] / 100, yaw: q[4] / 100, fl: q[5] });
+    e.net.seen = m[1];
+  }
+  for (const sh of m[5]) { // 적의 사격: 예광탄·총성·탄착
+    const e = coop.en.get(sh[0]);
+    if (!e || e.dead) continue;
+    const ex = sh[1] / 10, ey = sh[2] / 10, ez = sh[3] / 10, ox = e.pos.x, oy = 1.48 - e.crouch * 0.37, oz = e.pos.z;
+    _d.set(ex - ox, ey - oy, ez - oz);
+    const len = _d.length();
+    if (len > 0.5) {
+      _d.multiplyScalar(1 / len);
+      if (sh[4] & 1 && rayWorld(ox, oy, oz, _d.x, _d.y, _d.z, len + 0.8)) impactFx(ox + _d.x * hit.t, oy + _d.y * hit.t, oz + _d.z * hit.t, hit.nx, hit.ny, hit.nz, hit.m, 0.55);
+      if (!(sh[4] & 2)) whizNear(ox, oy, oz, _d, len);
+    }
+    e.shotFx(ex, ey, ez);
+  }
+}
+function coopOnEvent(link, m) {
+  if (coop.host) {
+    if (m.t === 'hi') {
+      if (m.v !== VERSION) { sendEv({ t: 'ver', v: VERSION }, link); return; }
+      if (link.pid > 0) return;
+      let pid = 1;
+      while (coop.roster.includes(pid)) pid++;
+      link.pid = pid;
+      coop.roster.push(pid);
+      sendEv({ t: 'wel', pid, started: coop.started, g: coop.gen }, link);
+      if (coop.started) { coopAddRemote(pid); feed(`${COOP_NAMES[pid]} 합류`); }
+      coopRoster();
+    } else if (m.t === 'hit') {
+      const e = enemies.find((q) => q.nid === m.i && !q.dead), src = coop.players.get(link.pid);
+      if (!e || !src) return;
+      e.damage(clamp(+m.d || 0, 0, 400), m.p | 0, m.v ? _m.set(m.v[0], m.v[1], m.v[2]) : null, +m.w || 0, m.b ? { x: m.b[0], y: m.b[1], z: m.b[2], power: m.b[3] } : null, src);
+    } else if (m.t === 'gren') {
+      if (!coop.started) return;
+      m.by = link.pid;
+      coopGhostGrenade(m);
+      coopSendGren({ x: m.p[0], y: m.p[1], z: m.p[2] }, { x: m.v[0], y: m.v[1], z: m.v[2] }, link.pid);
+    } else if (m.t === 'pick') coopPicked(link.pid);
+    return;
+  }
+  // 참가자
+  if (m.t === 'wel') { coop.pid = m.pid; lobStatus('방장이 시작하기를 기다리는 중'); if (m.started) coopBegin(m.g); }
+  else if (m.t === 'ros') {
+    coop.roster = m.l.map((q) => q[0]);
+    coop.info = m.l;
+    if (coop.started) {
+      for (const pid of coop.roster) if (pid !== coop.pid && !coop.players.has(pid)) { coopAddRemote(pid); feed(`${COOP_NAMES[pid]} 합류`); }
+      for (const pid of [...coop.players.keys()]) if (!coop.roster.includes(pid)) { feed(`${COOP_NAMES[pid]} 나감`); coopRemoveRemote(pid); }
+    }
+    lobRender();
+  } else if (m.t === 'go') coopBegin(m.g);
+  else if (m.t === 'ver') coopFail(`버전이 다릅니다. 방장 ${m.v}, 이 폰 ${VERSION}. 두 폰 모두 앱을 닫았다 다시 열어 같은 판으로 맞추세요.`);
+  else if (m.t === 'full') coopFail('방이 가득 찼습니다(최대 4명).');
+  else if (!coop.started) return;
+  else if (m.t === 'wave') {
+    game.wave = m.n; game.toSpawn = m.c; coop.supplyT = 0;
+    if (game.state === 'supply') setState('playing');
+    showMsg('WAVE ' + m.n, `적 ${m.c}명 접근 중`, 2.6);
+    SFX.play('wave', 0.6);
+  } else if (m.t === 'clr') {
+    if (!player.alive) coopRespawn();
+    giveAmmo();
+    gren.n = Math.min(4 + prog.lv.gren, gren.n + 1);
+    showMsg('구역 확보', `웨이브 ${m.n} 격퇴 · 보너스 +${m.b}`, 2.4);
+    coop.supplyT = 1.8;
+  } else if (m.t === 'die') {
+    const e = coop.en.get(m.i);
+    coop.dead.add(m.i);
+    if (!e || e.dead) return;
+    coop.en.delete(m.i);
+    e.kill(m.v ? _m.set(m.v[0], m.v[1], m.v[2]) : null, m.p, m.w, m.b ? { x: m.b[0], y: m.b[1], z: m.b[2], power: m.b[3] } : null, m.c || null);
+    const pts = e.T.score + (m.h ? 50 : 0);
+    if (m.by === coop.pid) {
+      game.kills++;
+      if (m.h) game.headshots++;
+      feed(m.h ? `헤드샷 +${pts}` : `${e.T.label} +${pts}`, !!m.h);
+      hudS.hm = 0.3;
+      el.hm.classList.add('kill');
+    } else feed(`${COOP_NAMES[m.by] || '대원'} · ${e.T.label}`);
+    if (m.dr) addPickup(m.dr === 1 ? 'ammo' : 'med', e.pos.x, e.pos.z);
+  } else if (m.t === 'hurt') hurtPlayer(+m.d || 0, { x: m.x, z: m.z });
+  else if (m.t === 'gren') coopGhostGrenade(m);
+  else if (m.t === 'over') coopShowOver('전원 쓰러짐', m);
+}
+function coopRoster() { // 방장: 명단(번호·핑·연결 경로)을 모두에게
+  coop.info = [[0, -1, '']];
+  for (const l of NET.links) if (l.pid > 0) coop.info.push([l.pid, Math.round(l.ping), l.route]);
+  sendEv({ t: 'ros', l: coop.info });
+  lobRender();
+}
+
+// ── 로비 화면: 방 만들기 / 코드로 참가 / 명단
+const lob = { step: 'choose', entry: '', status: '' };
+const NET_ERR = {
+  noroom: '그 코드의 방을 찾지 못했습니다. 코드를 다시 확인하세요.',
+  broker: '연결을 이어 주는 서버에 닿지 못했습니다. 인터넷 연결을 확인하고 다시 시도하세요.',
+  timeout: '연결하지 못했습니다. 두 폰이 서로 직접 닿지 못하는 통신망일 수 있습니다. 같은 와이파이에서 다시 시도해 보세요.',
+  browser: '이 브라우저에서는 협동 연결을 쓸 수 없습니다.',
+  webrtc: '연결에 실패했습니다. 다시 시도하세요.',
+  unknown: '연결에 실패했습니다. 다시 시도하세요.',
+};
+function lobStatus(t) {
+  lob.status = t;
+  $('coStatus').textContent = t;
+}
+function lobShow(step) {
+  lob.step = step;
+  $('coChoose').classList.toggle('hidden', step !== 'choose');
+  $('coPad').classList.toggle('hidden', step !== 'pad');
+  $('coKeys').classList.toggle('hidden', step !== 'pad');
+  $('coRoom').classList.toggle('hidden', step !== 'room');
+  $('coSide').classList.toggle('hidden', step !== 'room');
+  $('coHelp').classList.toggle('hidden', step === 'pad');
+  if (step === 'pad') lobEntry();
+  if (step === 'room') {
+    $('coCode').textContent = NET.code || '·····';
+    $('btnCoStart').classList.toggle('hidden', !coop.host);
+    $('btnCoShare').classList.toggle('hidden', !coop.host || !/^https?:$/.test(location.protocol) || !(navigator.share || (navigator.clipboard && navigator.clipboard.writeText)));
+    lobRender();
+  }
+}
+function lobEntry() {
+  $('coEntry').textContent = (lob.entry + '·····').slice(0, 5);
+  $('btnCoGo').disabled = lob.entry.length !== 5;
+}
+function lobRender() {
+  if (game.state !== 'coop' || lob.step !== 'room') return;
+  const box = $('coList'), info = coop.info || [];
+  box.textContent = '';
+  for (const q of info) {
+    const row = document.createElement('div'), b = document.createElement('b'), sp = document.createElement('span');
+    row.className = 'corow';
+    b.textContent = (COOP_NAMES[q[0]] || '대원') + (q[0] === coop.pid ? ' (나)' : '');
+    sp.textContent = q[0] === 0 ? '방장' : (q[1] >= 0 ? `${q[1]}ms` : '측정 중') + (q[2] === 'relay' ? ' · 중계 연결' : q[2] === 'direct' ? ' · 직접 연결' : '');
+    row.append(b, sp);
+    box.appendChild(row);
+  }
+  $('btnCoStart').textContent = info.length > 1 ? `시작 (${info.length}명)` : '혼자 시작';
+}
+function openCoop() {
+  SFX.initAudio(); // 이후 방장이 시작할 때 소리가 나도록 누른 김에 열어 둔다
+  lobStatus('');
+  $('coErr').textContent = '';
+  lobShow('choose');
+  setState('coop');
+}
+function coopFail(text) { // 연결 실패·끊김
+  const code = NET.code, wasGuest = coop.on && !coop.host, inGame = coop.started || game.state === 'over';
+  if (inGame && wasGuest) { // 게임 중에 끊김: 종료 화면에서 다시 참가할 수 있게
+    netClose();
+    coop.lost = code;
+    coopShowOver(text, null);
+    return;
+  }
+  const entry = wasGuest ? code : '';
+  if (coop.on) coopEnd();
+  if (game.state !== 'coop') { for (const e of enemies) e.remove(); enemies.length = 0; clearSquad(); SFX.suspend(true); setState('coop'); }
+  $('coErr').textContent = text;
+  lob.entry = entry;
+  lobShow(entry ? 'pad' : 'choose');
+}
+function coopWire() { // 전송 계층의 알림을 게임에 잇는다
+  NET.cb = {
+    open(code) { lobStatus('친구에게 방 코드를 알려 주세요. 들어오면 아래 명단에 나타납니다.'); $('coCode').textContent = code; coopRoster(); lobShow('room'); },
+    join(link) { if (!coop.host) { lobStatus('연결됨. 입장하는 중'); sendEv({ t: 'hi', v: VERSION }, link); } },
+    leave(link) {
+      if (!coop.on) return;
+      if (!coop.host) { coopFail(coop.started || coop.pid > 0 ? '방장과의 연결이 끊겼습니다.' : NET_ERR.timeout); return; }
+      if (link.pid > 0) {
+        coop.roster = coop.roster.filter((p) => p !== link.pid);
+        if (coop.players.has(link.pid)) { feed(`${COOP_NAMES[link.pid]} 나감`); coopRemoveRemote(link.pid); }
+        coopRoster();
+      }
+    },
+    ev: coopOnEvent,
+    st: coopOnState,
+    error(kind) { if (coop.on) coopFail(NET_ERR[kind] || NET_ERR.unknown); },
+    info() { if (coop.on && coop.host) coopRoster(); },
+  };
+}
+function coopHost() {
+  SFX.initAudio();
+  if (coop.on) coopEnd();
+  Object.assign(coop, { on: true, host: true, started: false, pid: 0, roster: [0], info: [[0, -1, '']], lost: '' });
+  $('coErr').textContent = '';
+  coopWire();
+  lobShow('room');
+  lobStatus('방을 여는 중');
+  netHost();
+}
+function coopJoin(code) {
+  SFX.initAudio();
+  if (coop.on) coopEnd();
+  Object.assign(coop, { on: true, host: false, started: false, pid: -1, roster: [], info: [], lost: '' });
+  $('coErr').textContent = '';
+  coopWire();
+  if (game.state !== 'coop') { for (const e of enemies) e.remove(); enemies.length = 0; clearSquad(); setState('coop'); }
+  netJoin(code);
+  lobShow('room');
+  $('coCode').textContent = code;
+  lobStatus('연결하는 중');
+}
+$('btnCoop').addEventListener('click', openCoop);
+$('btnCoHost').addEventListener('click', coopHost);
+$('btnCoJoin').addEventListener('click', () => { lob.entry = ''; $('coErr').textContent = ''; lobShow('pad'); });
+$('btnCoBack').addEventListener('click', () => setState('menu'));
+$('btnCoPadBack').addEventListener('click', () => lobShow('choose'));
+$('btnCoGo').addEventListener('click', () => { if (lob.entry.length === 5) coopJoin(lob.entry); });
+$('btnCoStart').addEventListener('click', coopHostStart);
+$('btnCoLeave').addEventListener('click', () => { coopEnd(); lobShow('choose'); });
+$('btnCoShare').addEventListener('click', () => {
+  const url = location.origin + location.pathname + '#j=' + NET.code;
+  if (navigator.share) navigator.share({ title: 'YARD ZERO 협동', text: `YARD ZERO 협동 생존 · 방 코드 ${NET.code}`, url }).catch(() => {});
+  else navigator.clipboard.writeText(url).then(() => lobStatus('초대 링크를 복사했습니다. 친구에게 붙여 보내세요.')).catch(() => {});
+});
+for (const k of $('coKeys').querySelectorAll('[data-k]')) {
+  k.addEventListener('click', () => {
+    const v = k.dataset.k;
+    if (v === 'del') lob.entry = lob.entry.slice(0, -1);
+    else if (lob.entry.length < 5) lob.entry += v;
+    lobEntry();
+  });
+}
+window.addEventListener('keydown', (e) => { // 키보드로 코드 입력
+  if (game.state !== 'coop' || lob.step !== 'pad') return;
+  if (/^(Digit|Numpad)\d$/.test(e.code)) { if (lob.entry.length < 5) lob.entry += e.code.slice(-1); lobEntry(); }
+  else if (e.code === 'Backspace') { lob.entry = lob.entry.slice(0, -1); lobEntry(); }
+  else if (e.code === 'Enter' && lob.entry.length === 5) coopJoin(lob.entry);
+});
+
 // ───────────────────────── 작전 진행 (에피소드): 단계별 목표, 무전, 팀원 합류·이탈
 const camp = { on: false, ep: null, idx: -1, si: -1, s: null, st: null, t: 0, epT: 0, next: null, boom: null, cp: null, mark: null };
 const markMat = new THREE.MeshBasicMaterial({ color: 0xffb23a, transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false });
@@ -1935,8 +2570,8 @@ function updateCampaign(dt) {
 // 작전 HUD: 목표 문구, 지점 표식, 분대 상태, 이름표, 무전
 let campHudT = 0;
 function updateCampHud(dt) {
-  const on = camp.on && (game.state === 'playing' || game.state === 'dying');
-  el.obj.classList.toggle('hidden', !on || !camp.s);
+  const on = (camp.on || coop.on) && live();
+  el.obj.classList.toggle('hidden', !on || !camp.on || !camp.s);
   el.squad.classList.toggle('hidden', !on);
   if (!on) { el.mk.classList.add('hidden'); for (const t of el.tags.children) t.classList.add('hidden'); return; }
   // 무전: 한 줄씩 차례로
@@ -1950,7 +2585,7 @@ function updateCampHud(dt) {
     radioT = clamp(1.4 + r.text.length * 0.075, 2.4, 4.6);
     SFX.play('equip', 0.35, 1.7);
   }
-  const s = camp.s, st = camp.st;
+  const s = camp.on ? camp.s : null, st = camp.st;
   campHudT -= dt;
   if (campHudT <= 0) {
     campHudT = 0.2;
@@ -1968,11 +2603,12 @@ function updateCampHud(dt) {
       row.classList.toggle('hidden', !a);
       if (a) {
         row.firstChild.textContent = a.def.name;
-        row.lastChild.firstChild.style.width = Math.round((a.hp / a.def.hp) * 100) + '%';
+        row.lastChild.firstChild.style.width = Math.round(clamp(a.hp / a.def.hp, 0, 1) * 100) + '%';
         row.className = 'sq' + (a.state === 'down' ? ' down' : a.state === 'leave' ? ' leave' : a.state === 'hold' ? ' hold' : '');
       }
     }
     el.sqOw.classList.toggle('hidden', !overwatch.on);
+    if (coop.on) setTxt('hudVer', VERSION + (coop.host ? ' · 방장' : NET.links[0] && NET.links[0].ping >= 0 ? ` · ${Math.round(NET.links[0].ping)}ms` : ''));
   }
   // 폭약 설치 진행
   if (s && s.type === 'plant' && st.near) {
@@ -1983,7 +2619,7 @@ function updateCampHud(dt) {
     camp.plantHud = true;
   } else if (camp.plantHud) { camp.plantHud = false; el.rl.style.opacity = 0; el.hint.style.opacity = 0; }
   // 목표 지점 표식 (화면 밖이면 가장자리에)
-  let m = camp.mark;
+  let m = camp.on ? camp.mark : null;
   if (!m && s && s.type === 'plant') { // 가장 가까운 미설치 지점
     let bd = 1e9;
     for (const p of st.sites) { if (p.done) continue; const d = Math.hypot(p.x - player.pos.x, p.z - player.pos.z); if (d < bd) { bd = d; m = p; } }
@@ -2041,6 +2677,7 @@ function openEpisodes() {
   setState('eps');
 }
 function quitToMenu() {
+  if (coop.on) coopEnd();
   for (const e of enemies) e.remove();
   enemies.length = 0;
   clearSquad();
@@ -2089,18 +2726,21 @@ function updatePickups(dt) {
 
 // ───────────────────────── 웨이브
 function startWave(n) {
+  const np = nPlayers();
   game.wave = n;
-  game.toSpawn = Math.min(4 + (n - 1) * 2, 18);
+  game.toSpawn = Math.min(Math.round((4 + (n - 1) * 2) * (1 + 0.5 * (np - 1))), 18 + 6 * (np - 1)); // 사람이 늘면 적도 는다
   game.spawnT = 0.5;
   game.queue = n === 2 ? ['rusher'] : n === 3 ? ['heavy'] : n === 4 ? ['sniper'] : [];
+  if (coop.on && game.state === 'supply') setState('playing'); // 보급을 고르지 못한 채 다음 웨이브가 시작됨
   showMsg('WAVE ' + n, `적 ${game.toSpawn}명 접근 중`, 2.6);
   SFX.play('wave', 0.6);
+  if (coop.host) sendEv({ t: 'wave', n, c: game.toSpawn });
 }
 function updateWaves(dt) {
   if (game.supplyT > 0) { // 구역 확보 알림을 잠깐 보여 준 뒤 보급 선택
     game.supplyT -= dt;
-    if (game.supplyT <= 0) openSupply();
-    return;
+    if (game.supplyT <= 0) { if (player.alive) openSupply(); else coop.picked.add(0); }
+    if (!coop.on) return;
   }
   if (game.between > 0) {
     game.between -= dt;
@@ -2120,8 +2760,10 @@ function updateWaves(dt) {
     giveAmmo();
     gren.n = Math.min(4 + prog.lv.gren, gren.n + 1);
     showMsg('구역 확보', `웨이브 ${game.wave} 격퇴 · 보너스 +${bonus}`, 2.4);
-    game.between = 5;
+    if (coop.on && !player.alive) coopRespawn();
+    game.between = coop.on ? 16 : 5; // 협동: 각자 보급을 고를 시간. 모두 고르면 바로 줄인다
     game.supplyT = 1.8;
+    if (coop.host) { coop.picked.clear(); sendEv({ t: 'clr', n: game.wave, b: bonus }); }
   }
 }
 
@@ -2166,6 +2808,12 @@ function updateDeath(dt) {
   player.vel.z = damp(player.vel.z, 0, 6, dt);
   player.hspeed = 0;
   vm.adsT = Math.max(0, vm.adsT - dt * 6);
+  if (coop.on) { // 협동: 끝나지 않고 잠시 뒤 출발 지점에서 복귀. 전원이 쓰러졌는지는 방장이 판정한다
+    const left = Math.ceil(COOP_RESPAWN - game.dieT);
+    if (left <= 0) coopRespawn();
+    else if (left !== coop.downSec) { coop.downSec = left; showMsg('쓰러짐', `${left}초 뒤 출발 지점에서 복귀`, 1.3); }
+    return;
+  }
   if (game.dieT > 1.9) {
     if (!camp.on && game.score > game.best) { game.best = game.score; store.set('best', game.best); }
     $('oWave').textContent = game.wave;
@@ -2181,15 +2829,27 @@ function updateDeath(dt) {
 }
 
 // ───────────────────────── 상태 전환
+// 게임 중에는 화면이 꺼지지 않게 한다 (협동에서 방장 폰의 화면이 꺼지면 모두 멈춘다). 지원하지 않는 브라우저에서는 아무 일도 하지 않는다
+const wake = { want: false, lock: null };
+function keepAwake(on) {
+  wake.want = on;
+  try {
+    if (on) {
+      if (!wake.lock && navigator.wakeLock && !document.hidden) navigator.wakeLock.request('screen').then((l) => { wake.lock = l; l.addEventListener('release', () => { if (wake.lock === l) wake.lock = null; }); if (!wake.want) keepAwake(false); }).catch(() => {});
+    } else if (wake.lock) { const l = wake.lock; wake.lock = null; l.release().catch(() => {}); }
+  } catch (e) { /* 미지원 */ }
+}
 function setState(s) {
   game.state = s;
+  keepAwake(s === 'playing' || s === 'dying' || s === 'supply' || (coop.on && s !== 'menu'));
   el.menu.classList.toggle('hidden', s !== 'menu');
   el.pause.classList.toggle('hidden', s !== 'paused');
   el.over.classList.toggle('hidden', s !== 'over');
   el.supply.classList.toggle('hidden', s !== 'supply');
   el.eps.classList.toggle('hidden', s !== 'eps');
   el.epdone.classList.toggle('hidden', s !== 'epdone');
-  el.hud.classList.toggle('hidden', s === 'menu' || s === 'over' || s === 'eps' || s === 'epdone');
+  el.coop.classList.toggle('hidden', s !== 'coop');
+  el.hud.classList.toggle('hidden', s === 'menu' || s === 'over' || s === 'eps' || s === 'epdone' || s === 'coop');
   if (s !== 'playing' && s !== 'dying') updateCampHud(0);
   el.touch.classList.toggle('hidden', s !== 'playing');
   el.bPause.classList.toggle('hidden', s !== 'playing');
@@ -2212,9 +2872,11 @@ function startGame() { // 생존 모드: 야드에서 끝없는 웨이브
 }
 function pauseGame() {
   if (game.state !== 'playing') return;
-  $('pauseBrief').textContent = camp.on ? `작전 ${camp.idx + 1} · ${camp.ep.title}: ${camp.ep.brief}` : '';
+  $('pauseBrief').textContent = camp.on ? `작전 ${camp.idx + 1} · ${camp.ep.title}: ${camp.ep.brief}` : coop.on ? `협동 생존 · 방 ${NET.code} · ${nPlayers()}명. 이 화면을 띄워도 게임은 멈추지 않습니다.` : '';
+  $('btnRestart').classList.toggle('hidden', coop.on && !coop.host);
+  $('btnQuit').textContent = coop.on ? '방 나가기' : '메뉴로';
   setState('paused');
-  SFX.suspend(true);
+  if (!coop.on) SFX.suspend(true);
 }
 function resumeGame() {
   if (game.state !== 'paused') return;
@@ -2362,7 +3024,7 @@ window.addEventListener('keydown', (e) => {
   else if (/^Digit[1-4]$/.test(e.code)) switchWeapon(ORDER[+e.code.slice(5) - 1]);
 });
 window.addEventListener('keyup', (e) => { input.keys[e.code] = false; });
-document.addEventListener('visibilitychange', () => { if (document.hidden) pauseGame(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) pauseGame(); else if (wake.want) keepAwake(true); });
 window.addEventListener('blur', () => { for (const k in input.keys) input.keys[k] = false; });
 
 // 메뉴 버튼
@@ -2403,11 +3065,11 @@ function setSoundBtn() {
   $('btnSound').querySelector('b').textContent = opt.sound ? '켬' : '끔';
 }
 $('btnStart').addEventListener('click', startGame);
-$('btnAgain').addEventListener('click', () => (camp.on ? startEpisode(camp.idx, Math.max(0, camp.si)) : startGame()));
-$('btnRestart').addEventListener('click', () => (camp.on ? startEpisode(camp.idx) : startGame()));
+$('btnAgain').addEventListener('click', () => (coop.on ? coopAgain() : camp.on ? startEpisode(camp.idx, Math.max(0, camp.si)) : startGame()));
+$('btnRestart').addEventListener('click', () => (coop.on ? coopHostStart() : camp.on ? startEpisode(camp.idx) : startGame()));
 $('btnCamp').addEventListener('click', openEpisodes);
 $('btnEpBack').addEventListener('click', () => setState('menu'));
-$('btnOverList').addEventListener('click', () => { quitToMenu(); openEpisodes(); });
+$('btnOverList').addEventListener('click', () => { const wasCoop = coop.on; quitToMenu(); if (!wasCoop) openEpisodes(); });
 $('btnQuit').addEventListener('click', quitToMenu);
 $('btnNextEp').addEventListener('click', () => startEpisode(camp.idx + 1));
 $('btnEpList').addEventListener('click', () => { quitToMenu(); openEpisodes(); });
@@ -2479,7 +3141,10 @@ function update(dt) {
   for (const a of allies) if (!a.gone) a.update(dt);
   for (let i = allies.length - 1; i >= 0; i--) if (allies[i].gone) allies.splice(i, 1);
   updateOverwatch(dt);
-  if (player.alive) { if (camp.on) updateCampaign(dt); else updateWaves(dt); updatePickups(dt); }
+  if (camp.on) { if (player.alive) updateCampaign(dt); }
+  else if (coop.on ? coop.host : player.alive) updateWaves(dt);
+  if (player.alive) updatePickups(dt);
+  if (coop.on) coopUpdate(dt);
   updateGrenades(dt);
   dust.update(dt); sparks.update(dt); tracers.update(dt); shells.update(dt);
   flashLight.intensity = flashLight.intensity < 0.05 ? 0 : flashLight.intensity * Math.exp(-dt * 55);
@@ -2496,7 +3161,7 @@ function render() {
   sparks.mat.uniforms.uScale.value = us;
   renderer.clear();
   renderer.render(scene, camera);
-  if (game.state !== 'menu' && game.state !== 'eps') {
+  if (game.state !== 'menu' && game.state !== 'eps' && game.state !== 'coop') {
     renderer.clearDepth();
     renderer.render(vmScene, vmCam);
   }
@@ -2506,16 +3171,15 @@ function frame(now) {
   const raw = now - last;
   last = now;
   const dt = clamp(raw / 1000, 0.001, 0.05);
-  if (game.state === 'playing' || game.state === 'dying') update(dt);
+  if (live()) update(dt);
   if (rain.on) updateRain(dt);
-  else if (game.state === 'menu' || game.state === 'eps') {
+  else if (game.state === 'menu' || game.state === 'eps' || game.state === 'coop') {
     menuT += dt;
     const a = menuT * 0.035 + 0.9, mcx = (B.x0 + B.x1) / 2 - (WORLD.id === 'yard' ? 12 : 0), mcz = (B.z0 + B.z1) / 2;
     camera.position.set(mcx + Math.sin(a) * 31, 7.5, mcz + Math.cos(a) * 25);
     camera.lookAt(mcx + 4, 2.2, mcz - 2);
   }
-  render();
-  // 프레임 시간이 길어지면 렌더 해상도를 낮춰 프레임을 지킨다
+  // 프레임 시간이 길어지면 렌더 해상도를 낮춰 프레임을 지킨다. 해상도를 바꾸면 캔버스가 비워지므로 그리기 전에 한다
   if (game.state === 'playing' && !dbg.noDyn) {
     ema += (Math.min(raw, 100) - ema) * 0.05;
     dynT += dt;
@@ -2529,6 +3193,7 @@ function frame(now) {
       else if (ema < 14 && prCur < prCap) { prCur = Math.min(prCap, prCur + prCap * 0.1); renderer.setPixelRatio(prCur); }
     }
   }
+  render();
 }
 
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); pauseGame(); });
@@ -2542,7 +3207,8 @@ applyQuality();
 resize();
 showWeapon();
 setState('menu');
+{ const mj = /[#&]j=(\d{5})\b/.exec(location.hash); if (mj) { lobStatus(''); $('coErr').textContent = ''; lob.entry = mj[1]; lobShow('pad'); setState('coop'); } }
 requestAnimationFrame(frame);
 
 // 자동 검증용 훅
-window.__yz = { step: (n, dt) => { for (let i = 0; i < n && (game.state === 'playing' || game.state === 'dying'); i++) update(dt); }, chestY, camp, allies, overwatch, EPISODES, SQUAD, startEpisode, squadJoin, squadLeave, squadHold, squadFollow, setOverwatch, openEpisodes, quitToMenu, radioQ, store, loadMap, applyEnv, ENVS, WORLD, B, START, rayWorld, losClear, blockedAt, findPath, prog, openSupply, pickSupply, applySupply, SFX, WH, dust, sparks, TYPES, gren, throwGrenade, explode, ORDER, MOCAP, aa, VM, scene, colliders, toggleRot, game, player, enemies, input, vm, W, opt, dbg, renderer, camera, pickups, spawnEnemy, startGame, hurtPlayer, switchWeapon, startReload, applyQuality, NAV };
+window.__yz = { step: (n, dt) => { for (let i = 0; i < n && live(); i++) update(dt); }, coop, NET, humans, coopHost, coopJoin, coopHostStart, coopEnd, lob, RemotePlayer, chestY, camp, allies, overwatch, EPISODES, SQUAD, startEpisode, squadJoin, squadLeave, squadHold, squadFollow, setOverwatch, openEpisodes, quitToMenu, radioQ, store, loadMap, applyEnv, ENVS, WORLD, B, START, rayWorld, losClear, blockedAt, findPath, prog, openSupply, pickSupply, applySupply, SFX, WH, dust, sparks, TYPES, gren, throwGrenade, explode, ORDER, MOCAP, aa, VM, scene, colliders, toggleRot, game, player, enemies, input, vm, W, opt, dbg, renderer, camera, pickups, spawnEnemy, startGame, hurtPlayer, switchWeapon, startReload, applyQuality, NAV };

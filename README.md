@@ -1,9 +1,9 @@
 # YARD ZERO
 
-모바일용 3D FPS. 항만 일대(컨테이너 야드, 부두, 차량기지)에서 팀원과 함께 단계별 작전을 수행하거나, 생존 모드에서 웨이브를 막는 게임이다.
-three.js 0.170.0 번들, 병사 모델, 효과음, 애니메이션을 모두 넣은 단일 HTML 파일로 동작한다.
+모바일용 3D FPS. 항만 일대(컨테이너 야드, 부두, 차량기지)에서 팀원과 함께 단계별 작전을 수행하거나, 생존 모드에서 웨이브를 막는 게임이다. 협동 생존은 2~4명이 방 코드로 모여 같은 웨이브를 막는다.
+three.js 0.170.0 번들, 병사 모델, 효과음, 애니메이션, 네트워크 라이브러리(PeerJS)를 모두 넣은 단일 HTML 파일로 동작한다.
 
-- 최신 릴리스: `index.html` (현재 v0.6.1, 설치형 PWA)
+- 최신 릴리스: `index.html` (현재 v0.7, 설치형 PWA)
 - 버전별 스냅샷: `versions/yard-zero-v0.x.html`
 - 변경 기록과 검증 내용: `CHANGELOG.md`
 
@@ -18,6 +18,14 @@ GitHub Pages를 켜면 `https://aaronkyung-a11y.github.io/yard-zero/` 에서 열
 한 번 열면 서비스 워커가 캐시해 오프라인에서도 실행된다. 파일로 직접 열 때는 `versions/`의 스냅샷을 쓴다.
 지금 실행 중인 버전은 메뉴 맨 위, 게임 중 점수 아래, 일시정지 화면에 표시된다. 열려 있는 화면보다 새 판이 받아지면 메뉴에 "새 버전 적용" 버튼이 나타난다.
 
+## 협동 생존 (네트워크)
+
+- 한 명이 "협동 → 방 만들기"로 방을 열고 숫자 5자리 코드를 알려 주면, 나머지는 "코드로 참가"에서 그 코드를 넣는다. 최대 4명
+- 서버를 따로 두지 않는다. 폰끼리 직접 연결(WebRTC 데이터 채널)하고, 처음 서로를 찾는 중개만 PeerJS 공개 서버(`0.peerjs.com`)를 쓴다. 직접 연결이 안 되는 통신망에서는 PeerJS 기본 설정의 중계 서버를 거친다. 로비 명단에 핑과 "직접 연결 / 중계 연결"이 표시된다
+- 방을 만든 폰(방장)이 적 AI와 웨이브를 계산한다. 방장 폰의 화면이 꺼지거나 앱이 뒤로 가면 모두 멈춘다
+- 모든 폰이 같은 버전이어야 한다. 버전이 다르면 입장할 때 안내가 나온다
+- 전송 계층은 `src/net.js`, 게임 쪽 동기화는 `src/main.js`의 "협동 생존(네트워크)" 부분
+
 ## 빌드
 
 ```
@@ -27,7 +35,7 @@ node build.mjs v0.x    # index.html(PWA) + sw.js, dist/index.html, versions/yard
 
 ## 구조
 
-- `src/` 게임 코드 (`main.js` 게임 루프·무기·적과 팀원 AI·작전 진행, `episodes.js` 작전과 분대 데이터, `world.js` 맵 3종·충돌·내비게이션, `mocap.js`·`retarget.js` 병사 애니메이션, `audio.js` 효과음, `viewmodel.js` 1인칭 총기, `textures.js` 절차적 텍스처)
+- `src/` 게임 코드 (`main.js` 게임 루프·무기·적과 팀원 AI·작전 진행·협동 동기화, `net.js` 네트워크 전송 계층, `episodes.js` 작전과 분대 데이터, `world.js` 맵 3종·충돌·내비게이션, `mocap.js`·`retarget.js` 병사 애니메이션, `audio.js` 효과음, `viewmodel.js` 1인칭 총기, `textures.js` 절차적 텍스처)
 - `assets/` 병사 모델, 애니메이션 클립, 효과음 샘플
 - `pwa/` PWA 머리말 태그와 서비스 워커 원본, `manifest.webmanifest`, `icons/`
 - `tools/` 에셋 가공 스크립트 (모델 경량화, 클립 추출, 효과음 자르기)
@@ -39,3 +47,4 @@ node build.mjs v0.x    # index.html(PWA) + sw.js, dist/index.html, versions/yard
 - 애니메이션 클립: Quaternius Universal Animation Library 1·2 (CC0)
 - 효과음: opengameart.org의 CC0 녹음. 목록은 `CHANGELOG.md`의 v0.4 "에셋 출처" 참고
 - three.js: MIT
+- PeerJS 1.5.5 (네트워크): MIT
