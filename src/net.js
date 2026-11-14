@@ -1,17 +1,23 @@
 // 네트워크 전송 계층: PeerJS(WebRTC 데이터 채널)로 방장 1명과 참가자 최대 3명을 잇는다.
 //  - 방 코드는 숫자 5자리. 방장의 peer id는 'yardzero-' + 코드이고 참가자는 그 id로 연결한다
 //  - 채널 2개: 사건용(순서와 재전송 보장, PeerJS 기본 채널)과 상태용(순서·재전송 없음, 같은 연결 위에 직접 여는 RTCDataChannel)
-//  - 처음 서로를 찾는 중개만 PeerJS 공개 서버를 쓰고, 게임 데이터는 폰끼리 직접 오간다. 직접 연결이 안 되면 PeerJS 기본 설정의 중계(TURN)를 거친다
+//  - 처음 서로를 찾는 중개만 PeerJS 공개 서버를 쓰고, 게임 데이터는 폰끼리 직접 오간다
+//  - 중계(TURN): PeerJS 기본 설정의 중계 주소(eu-0/us-0.turn.peerjs.com)는 2026-11-14 조회에서 DNS 응답이 비어 있어 쓰지 않는다.
+//    RELAY에 중계 서버를 넣으면 직접 연결이 안 되는 통신망(같은 공유기 안에서 폰끼리 막힌 경우 등)에서도 이어진다
 import { Peer } from 'peerjs';
+
+const STUN = ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478'];
+export const RELAY = []; // 예: { urls: ['turn:host:3478', 'turn:host:3478?transport=tcp'], username: '…', credential: '…' }
 
 const PREFIX = 'yardzero-';
 export const MAX_GUESTS = 3;
 // role: '' | 'host' | 'guest'. links: 연결된 상대(방장에게는 참가자들, 참가자에게는 방장 하나)
 // cb: open(code) 방이 열림 / join(link) 상대와 연결됨 / leave(link, why) 끊김 / ev(link, msg) 사건 / st(link, arr) 상태 / error(kind, detail) / info() 핑·경로 갱신
-export const NET = { role: '', code: '', peer: null, links: [], cb: {}, timer: 0, tries: 0, joinTimer: 0 };
+// cb.miss(diag): (방장) 들어오려던 상대와 끝내 이어지지 못함. lastDiag: 가장 최근에 실패한 연결의 진단
+export const NET = { role: '', code: '', peer: null, links: [], cb: {}, timer: 0, tries: 0, joinTimer: 0, lastDiag: null };
 
 const now = () => performance.now();
-const peerOpts = () => Object.assign({ debug: 0 }, window.__yzPeer || {}); // 테스트에서는 window.__yzPeer로 로컬 중개 서버를 가리킨다
+const peerOpts = () => Object.assign({ debug: 0, config: { iceServers: [{ urls: STUN }, ...RELAY], sdpSemantics: 'unified-plan' } }, window.__yzPeer || {}); // 테스트에서는 window.__yzPeer로 로컬 중개 서버를 가리킨다
 const call = (name, a, b) => { const f = NET.cb[name]; if (f) { try { f(a, b); } catch (e) { console.error(e); } } };
 const ERR = { 'peer-unavailable': 'noroom', 'unavailable-id': 'taken', network: 'broker', 'server-error': 'broker', 'socket-error': 'broker', 'socket-closed': 'broker', 'browser-incompatible': 'browser', 'ssl-unavailable': 'broker', webrtc: 'webrtc', 'invalid-id': 'broker', 'invalid-key': 'broker' };
 
@@ -27,8 +33,53 @@ function attachU(link, ch) {
   };
 }
 
+// ── 연결 진단: 맺어지기 전까지 두 폰이 내놓은 주소 후보를 기록해 두었다가, 실패하면 원인 안내에 쓴다
+//  후보 종류: host(같은 와이파이 안 주소. 브라우저가 이름(mDNS)으로 가리기도 한다) / srflx(공인 주소) / relay(중계)
+const isV4 = (a) => !!a && a.indexOf(':') < 0 && !/\.local$/.test(a);
+function watch(link) {
+  const pc = link.conn.peerConnection;
+  link.diag = { loc: {}, rem: {}, mdns: false, rmdns: false, pub: '', rpub: '', ice: pc ? pc.iceConnectionState : 'none' };
+  if (!pc) return;
+  pc.addEventListener('icecandidate', (e) => {
+    const c = e.candidate, d = link.diag;
+    if (!c || !c.candidate) return;
+    const f = c.candidate.split(' '), type = c.type || f[7] || '?', addr = c.address || f[4] || '';
+    d.loc[type] = 1;
+    if (type === 'host' && /\.local$/.test(addr)) d.mdns = true;
+    if (type === 'srflx' && isV4(addr)) d.pub = addr;
+  });
+  pc.addEventListener('iceconnectionstatechange', () => { if (pc.iceConnectionState !== 'closed') link.diag.ice = pc.iceConnectionState; });
+}
+function probe(link) {
+  const pc = link.conn.peerConnection, d = link.diag;
+  if (!pc || !d || pc.signalingState === 'closed') return;
+  pc.getStats().then((st) => {
+    st.forEach((r) => {
+      if (r.type === 'remote-candidate') {
+        d.rem[r.candidateType] = 1;
+        if (r.candidateType === 'host' && /\.local$/.test(r.address || '')) d.rmdns = true;
+        if (r.candidateType === 'srflx' && isV4(r.address)) d.rpub = r.address;
+      } else if (r.type === 'local-candidate') {
+        d.loc[r.candidateType] = 1;
+        if (r.candidateType === 'srflx' && isV4(r.address)) d.pub = r.address;
+      }
+    });
+  }).catch(() => {});
+}
+// same: 두 폰의 공인 주소가 같은가(= 같은 공유기 아래). 알 수 없으면 null. code: 화면에 그대로 보여 줄 짧은 진단 문자열
+export function diagOf(link) {
+  const d = link && link.diag;
+  if (!d) return null;
+  const f = (o, m) => ['host', 'srflx', 'relay', 'prflx'].filter((k) => o[k]).map((k) => (k === 'host' ? (m ? '내부(가림)' : '내부') : k === 'srflx' ? '공인' : k === 'relay' ? '중계' : '반사')).join('·') || '없음';
+  const same = d.pub && d.rpub ? d.pub === d.rpub : null;
+  const ICE = { new: '시작 전', checking: '확인 중', connected: '연결됨', completed: '연결됨', disconnected: '끊김', failed: '실패', none: '없음' };
+  return { same, noLocal: !Object.keys(d.loc).length, noPub: !d.loc.srflx, noRemote: !Object.keys(d.rem).length, relay: !!(d.loc.relay || d.rem.relay), ice: d.ice,
+    code: `이 폰 ${f(d.loc, d.mdns)} / 상대 ${f(d.rem, d.rmdns)} / ${same === null ? '망 비교 불가' : same ? '같은 공유기' : '다른 통신망'} / ${ICE[d.ice] || d.ice}` };
+}
+
 function mkLink(conn, originator) {
-  const link = { id: conn.peer, conn, u: null, open: false, ping: -1, route: '', rx: now(), born: now(), pid: -1, routeT: 0 };
+  const link = { id: conn.peer, conn, u: null, open: false, ping: -1, route: '', rx: now(), born: now(), pid: -1, routeT: 0, diag: null };
+  watch(link);
   const pc = conn.peerConnection;
   if (pc && !originator) { // 상대가 여는 상태 채널을 받는다. PeerJS가 걸어 둔 처리기는 첫 채널에만 필요하므로 감싸서 넘긴다
     const orig = pc.ondatachannel;
@@ -68,8 +119,10 @@ function drop(link, why) {
   NET.links.splice(i, 1);
   const was = link.open;
   link.open = false;
+  if (!was) NET.lastDiag = diagOf(link);
   try { link.conn.close(); } catch (e) { /* 이미 닫힘 */ }
   if (was || NET.role === 'guest') call('leave', link, why);
+  else if (why !== 'full') call('miss', NET.lastDiag);
 }
 
 async function detectRoute(link) {
@@ -88,7 +141,7 @@ async function detectRoute(link) {
 function tick() {
   const t = now();
   for (const link of NET.links.slice()) {
-    if (!link.open) { if (t - link.born > 20000) drop(link, 'timeout'); continue; }
+    if (!link.open) { if (t - link.born > 26000) drop(link, 'timeout'); else probe(link); continue; }
     try { link.conn.send({ t: 'pi', n: t }); } catch (e) { /* 무시 */ }
     if (t - link.rx > 9000) { drop(link, 'timeout'); continue; }
     if (t - link.routeT > (link.route ? 10000 : 1500)) { link.routeT = t; detectRoute(link); }
@@ -127,6 +180,7 @@ export function host() {
   close();
   start('host');
   NET.tries = 0;
+  NET.lastDiag = null;
   openRoom();
 }
 
@@ -134,6 +188,7 @@ export function join(code) {
   close();
   start('guest');
   NET.code = code;
+  NET.lastDiag = null;
   const peer = (NET.peer = new Peer(peerOpts()));
   peer.on('open', () => {
     if (NET.peer !== peer) return;
@@ -141,7 +196,7 @@ export function join(code) {
   });
   peer.on('error', (e) => { if (NET.peer === peer) onPeerError(e); });
   clearTimeout(NET.joinTimer);
-  NET.joinTimer = setTimeout(() => { if (NET.peer === peer && !NET.links.some((l) => l.open)) call('error', 'timeout'); }, 15000);
+  NET.joinTimer = setTimeout(() => { if (NET.peer === peer && !NET.links.some((l) => l.open)) { if (NET.links[0]) NET.lastDiag = diagOf(NET.links[0]); call('error', 'timeout'); } }, 20000);
 }
 
 // 사건: 순서와 도착이 보장된다. link를 주지 않으면 연결된 모두에게

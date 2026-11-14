@@ -12,7 +12,7 @@ import { buildViewmodel } from './viewmodel.js';
 import { EPISODES, SQUAD } from './episodes.js';
 import { NET, host as netHost, join as netJoin, sendEv, sendSt, close as netClose } from './net.js';
 
-const VERSION = 'v0.7';
+const VERSION = 'v0.8';
 const UP = new THREE.Vector3(0, 1, 0);
 const _f = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _d = new THREE.Vector3(), _v = new THREE.Vector3(), _w = new THREE.Vector3(), _m = new THREE.Vector3(), _mz = new THREE.Vector3();
 const ZAXIS = new THREE.Vector3(0, 0, 1);
@@ -281,8 +281,14 @@ const game = { state: 'menu', queue: [], time: 0, wave: 0, toSpawn: 0, spawnT: 0
 const enemies = [], pickups = [];
 let tokens = 0, aliveCount = 0, whizT = 0;
 // 협동(네트워크) 상태. host: 내가 방장인가, pid: 내 번호(방장 0), players: 다른 플레이어(pid → RemotePlayer), en: 참가자 쪽 적(번호 → Enemy)
-const coop = { on: false, host: false, started: false, pid: 0, players: new Map(), en: new Map(), roster: [], nextId: 0, seq: 0, snapSeq: -1, gen: 0, dead: new Set(), lastSend: 0, lastSnap: 0, stall: false, shots: [], myShots: 0, supplyT: 0, picked: new Set(), safeT: 0, downSec: -1, allDownT: 0, lost: '' };
+const coop = { on: false, host: false, started: false, pid: 0, players: new Map(), en: new Map(), roster: [], nextId: 0, seq: 0, snapSeq: -1, gen: 0, dead: new Set(), lastSend: 0, lastSnap: 0, stall: false, shots: [], myShots: 0, supplyT: 0, picked: new Set(), safeT: 0, downSec: -1, allDownT: 0, lost: '',
+  cfg: { mode: 'surv', map: 'yard', kt: 10 }, sc: new Map(), pkT: 0, endT: 0, by: -1, quietT: 0 }; // cfg: 방장이 고른 모드·맵·목표 킬, sc: 대결 점수(번호 → [킬, 데스])
 const COOP_NAMES = ['알파', '브라보', '찰리', '델타'];
+// 대결(개인전): 방장이 고른 맵에서 서로 싸운다. 먼저 목표 킬에 닿는 사람이 이긴다
+const isPvp = () => coop.on && coop.cfg.mode === 'pvp';
+const PVP_RESPAWN = 4, PVP_DMG = 0.7, PVP_HEAD = 2, PVP_QUIET = 15; // 복귀까지(초), 사람에게 주는 피해 배율(적 AI에 맞춘 값은 사람에게 너무 세다), 머리 배율, 교전 없이 이만큼(초) 지나면 가장 가까운 상대의 위치 표식을 띄운다
+const PVP_MATS = ['rifle', 'rusher', 'heavy', 'sniper'], PVP_KT = [5, 10, 15, 20], PVP_MAPS = ['yard', 'dock', 'depot'];
+const pvHits = new Map();
 // 게임이 흘러가는 상태인가. 협동에서는 보급 선택·일시정지 화면을 띄워도 세계는 멈추지 않는다
 const live = () => game.state === 'playing' || game.state === 'dying' || (coop.on && coop.started && (game.state === 'supply' || game.state === 'paused'));
 const humans = () => (coop.on ? [player, ...coop.players.values()] : [player]); // 적이 상대하는 사람 플레이어
@@ -336,9 +342,11 @@ function updateHud(dt) {
   if (cache.low !== low) { cache.low = low; el.ammoN.classList.toggle('low', low); }
   setTxt('ammoR', '/ ' + (w.reserve === Infinity ? '∞' : w.reserve));
   setTxt('wName', w.name);
-  setTxt('waveTxt', camp.on ? `작전 ${camp.idx + 1} · ${Math.max(1, camp.si + 1)}/${camp.ep.stages.length}` : 'WAVE ' + Math.max(1, game.wave));
-  setTxt('enemyTxt', '적 ' + (camp.on ? aliveCount : game.toSpawn + aliveCount));
-  setTxt('scoreTxt', String(game.score));
+  if (!isPvp()) { // 대결의 점수 표시는 updateCampHud에서 갱신한다
+    setTxt('waveTxt', camp.on ? `작전 ${camp.idx + 1} · ${Math.max(1, camp.si + 1)}/${camp.ep.stages.length}` : 'WAVE ' + Math.max(1, game.wave));
+    setTxt('enemyTxt', '적 ' + (camp.on ? aliveCount : game.toSpawn + aliveCount));
+    setTxt('scoreTxt', String(game.score));
+  }
   setTxt('grenN', String(gren.n));
   const scoped = !!w.scope && vm.adsT > 0.82 && player.alive;
   if (cache.scoped !== scoped) { cache.scoped = scoped; el.scope.classList.toggle('hidden', !scoped); }
@@ -348,7 +356,7 @@ function updateHud(dt) {
   hudS.hm = Math.max(0, hudS.hm - dt);
   el.hm.style.opacity = Math.min(1, hudS.hm / 0.12).toFixed(2);
   hudS.hurt = Math.max(0, hudS.hurt - dt * 1.8);
-  el.hurt.style.opacity = Math.min(1, clamp((1 - hp) * 0.75 - 0.15, 0, 0.7) + hudS.hurt * 0.6).toFixed(2);
+  el.hurt.style.opacity = Math.min(1, clamp((1 - hp) * 0.6 - 0.24, 0, 0.36) + hudS.hurt * 0.6).toFixed(2);
   const sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
   for (const d of dmgInd) {
     if (d.t <= 0) continue;
@@ -407,6 +415,12 @@ function rayEnemy(e, o, d, maxT) {
   rayEnemy.part = part;
   return best;
 }
+// 높이가 있는 대상(다른 플레이어: 2층·계단·점프)에도 쓰는 판정. 맞은 부위는 rayEnemy.part
+const _ro = { x: 0, y: 0, z: 0 };
+function rayBody(e, o, d, maxT) {
+  _ro.x = o.x; _ro.y = o.y - (e.pid !== undefined ? e.pos.y : 0); _ro.z = o.z;
+  return rayEnemy(e, _ro, d, maxT);
+}
 function rayPlayer(ox, oy, oz, d, maxT) {
   const ex = ox - player.pos.x, ez = oz - player.pos.z, a = d.x * d.x + d.z * d.z;
   if (a < 1e-8) return -1;
@@ -436,6 +450,8 @@ function ejectShell() {
 }
 
 function shoot(w) {
+  const pv = isPvp() && coop.started;
+  if (pv) coop.safeT = 0; // 복귀 직후의 보호는 쏘는 순간 끝난다
   coop.myShots = (coop.myShots + 1) & 255;
   w.ammo--;
   vm.cool = 60 / w.rpm;
@@ -459,22 +475,34 @@ function shoot(w) {
       const t = rayEnemy(e, o, _d, tEnd);
       if (t >= 0) { tEnd = t; target = e; part = rayEnemy.part; }
     }
+    if (pv) for (const r of coop.players.values()) {
+      if (!r.alive) continue;
+      const t = rayBody(r, o, _d, tEnd);
+      if (t >= 0) { tEnd = t; target = r; part = rayEnemy.part; }
+    }
     // 조준 보조: 조준선이 적 바로 옆을 스치면 탄을 적 쪽으로 끌어 준다
     if (!target && i === 0 && (input.lastTouch || opt.autoFire) && aa.e && aa.vis && aa.ang < 0.04 && !aa.e.dead) {
       _m.set(aa.e.pos.x - o.x + rr(-0.1, 0.1), aa.y - o.y + rr(-0.12, 0.12), aa.e.pos.z - o.z + rr(-0.1, 0.1)).normalize();
-      const t = rayEnemy(aa.e, o, _m, w.range), pt = rayEnemy.part;
+      const t = rayBody(aa.e, o, _m, w.range), pt = rayEnemy.part;
       if (t >= 0 && !rayWorld(o.x, o.y, o.z, _m.x, _m.y, _m.z, t)) { _d.copy(_m); tEnd = t; target = aa.e; part = pt; world = false; }
     }
     const hx = o.x + _d.x * tEnd, hy = o.y + _d.y * tEnd, hz = o.z + _d.z * tEnd;
     if (target) {
-      const dmg = w.dmg * (1 + 0.12 * prog.lv.ap) * (part === 2 ? target.T.headMul : part === 1 ? 1 : 0.7) * clamp(1 - (tEnd - w.fall[0]) / (w.fall[1] - w.fall[0]), w.fall[2], 1);
+      const fall = clamp(1 - (tEnd - w.fall[0]) / (w.fall[1] - w.fall[0]), w.fall[2], 1);
       if (i < 3) bloodFx(hx, hy, hz, _d);
       anyHit = true;
       if (part === 2) headHit = true;
-      if (target.damage(dmg, part, _d, w.push)) { killed = true; headKill = part === 2; }
+      if (target instanceof RemotePlayer) { // 대결: 산탄처럼 여러 발이 맞으면 모아서 한 번에 알린다
+        const h = pvHits.get(target) || { d: 0, p: 0 };
+        h.d += w.dmg * PVP_DMG * (part === 2 ? PVP_HEAD : part === 1 ? 1 : 0.7) * fall;
+        h.p = Math.max(h.p, part);
+        pvHits.set(target, h);
+        target.struck(_d);
+      } else if (target.damage(w.dmg * (1 + 0.12 * prog.lv.ap) * (part === 2 ? target.T.headMul : part === 1 ? 1 : 0.7) * fall, part, _d, w.push)) { killed = true; headKill = part === 2; }
     } else if (world) impactFx(hx, hy, hz, nx, ny, nz, mat, i === 0 ? 0.8 : 0, i > 0);
     if (i < 3) tracers.spawn(_mz.x, _mz.y, _mz.z, hx, hy, hz);
   }
+  if (pvHits.size) { for (const [r, h] of pvHits) pvpSendHit(r.pid, h.d, h.p); pvHits.clear(); }
   if (anyHit) {
     game.hits++;
     hudS.hm = killed ? 0.3 : 0.16;
@@ -519,11 +547,14 @@ const SUPPLY = [
   { id: 'ap', t: '철갑탄', d: '모든 총의 피해 12% 증가', max: 3 },
   { id: 'gren', t: '수류탄 꾸러미', d: '수류탄 2개 · 최대 소지 +1', max: 2 },
   { id: 'ammo', t: '탄약 상자', d: '가진 총의 예비 탄약을 가득 채움' },
+  { id: 'heal', t: '구급 상자', d: '체력을 전부 회복' },
 ];
 function supplyOptions() {
-  const avail = SUPPLY.filter((s) => (s.weapon ? !prog.owned[s.id] : !s.max || prog.lv[s.id] < s.max));
+  const hurt = player.hp < prog.maxHp * 0.95;
+  const avail = SUPPLY.filter((s) => (s.weapon ? !prog.owned[s.id] : s.id === 'heal' ? hurt : !s.max || prog.lv[s.id] < s.max));
   const weapons = avail.filter((s) => s.weapon), rest = avail.filter((s) => !s.weapon), out = [];
   if (weapons.length) out.push(weapons[(Math.random() * weapons.length) | 0]); // 없는 무기가 있으면 한 칸은 무기
+  if (player.hp < prog.maxHp * 0.5) { const i = rest.findIndex((s) => s.id === 'heal'); if (i >= 0) out.push(rest.splice(i, 1)[0]); } // 많이 다쳤으면 한 칸은 반드시 회복
   while (out.length < 3 && rest.length) out.push(rest.splice((Math.random() * rest.length) | 0, 1)[0]);
   return out;
 }
@@ -548,7 +579,8 @@ function applySupply(id) {
     switchWeapon(id);
   } else if (id === 'ammo') {
     for (const k of ORDER) if (prog.owned[k] && W[k].cap !== Infinity) W[k].reserve = W[k].cap;
-  } else {
+  } else if (id === 'heal') player.hp = prog.maxHp;
+  else {
     prog.lv[id]++;
     if (id === 'mag') for (const k of ORDER) W[k].mag = Math.round(W[k].mag0 * (1 + 0.3 * prog.lv.mag));
     if (id === 'medkit') { prog.maxHp += 25; player.hp = prog.maxHp; }
@@ -601,7 +633,7 @@ function updateWeapon(dt) {
   const w = W[vm.cur];
   vm.cool -= dt;
   vm.fireBuf -= dt;
-  const auto0 = opt.autoFire && aa.held > 0.07 && aa.d < (w.autoRange || w.range * 0.7);
+  const auto0 = opt.autoFire && aa.held > (isPvp() ? 0.15 : 0.07) && aa.d < (w.autoRange || w.range * 0.7);
   // 한 발씩 장전하는 중에 쏘려고 하면 장전을 멈춘다
   if (w.shell && vm.reloadT > 0 && w.ammo > 0 && (vm.fireBuf > 0 || auto0)) { vm.reloadT = 0; vm.cool = Math.max(vm.cool, 0.25); if (vm.fireBuf > 0) vm.fireBuf = 0.4; } // 누른 한 발은 장전을 멈춘 직후에 나간다
   const busy = vm.reloadT > 0 || vm.switchT > 0 || vm.throwT > 0.15;
@@ -728,7 +760,8 @@ function updateViewmodel(dt) {
 }
 
 // ───────────────────────── 플레이어
-function hurtPlayer(dmg, from) {
+// by: 대결에서 나를 맞힌 사람의 번호(없으면 내 수류탄 같은 자기 피해), head: 머리에 맞았나
+function hurtPlayer(dmg, from, by = -1, head = false) {
   if (!player.alive || coop.safeT > 0) return;
   player.hp -= dmg * (1 - 0.15 * prog.lv.armor);
   player.lastHurt = game.time;
@@ -741,11 +774,11 @@ function hurtPlayer(dmg, from) {
   if (player.hp <= 0) {
     player.hp = 0;
     player.alive = false;
-    game.state = 'dying';
     game.dieT = 0;
-    el.touch.classList.add('hidden');
-    el.bPause.classList.add('hidden');
+    coop.downSec = -1;
+    if (!(coop.on && game.state === 'paused')) setState('dying'); // 협동·대결에서 메뉴를 띄운 채 쓰러지면 메뉴는 그대로 둔다
     releaseInput();
+    if (isPvp() && coop.started) pvpReportDeath(by < 0 ? coop.pid : by, head);
   }
 }
 
@@ -806,24 +839,25 @@ function updatePlayer(dt) {
       SFX.play(player.col.gm === 1 ? 'stepM' : 'step', player.crouch ? 0.16 : player.sprint ? 0.55 : 0.4, rr(0.94, 1.06) * (player.col.gm === 2 ? 0.85 : 1));
     }
   }
-  if (game.time - player.lastHurt > 4.5 && player.hp < prog.maxHp) player.hp = Math.min(prog.maxHp, player.hp + 10 * dt);
+  // v0.8: 시간이 지나도 체력은 저절로 차지 않는다. 회복은 의무 보급품과 보급 선택으로만
 }
 
 // ───────────────────────── 조준 보조·자동 사격용 표적 탐색
 const aa = { e: null, ang: 9, d: 0, vis: false, y: 1.3, held: 0 };
-const chestY = (e) => 1.3 - e.crouch * 0.3;
+const chestY = (e) => (e.pid !== undefined ? e.pos.y : 0) + 1.3 - e.crouch * 0.3; // 다른 플레이어는 2층·계단에 있을 수 있다
 function scanTarget(dt) {
   camera.getWorldDirection(_f);
   const c = camera.position;
   let best = null, bc = 0.986, bd = 0;
-  for (const e of enemies) {
-    if (e.dead) continue;
+  const scan = (e) => {
     _v.set(e.pos.x - c.x, chestY(e) - c.y, e.pos.z - c.z);
     const d = _v.length();
-    if (d > 90 || d < 0.6) continue;
+    if (d > 90 || d < 0.6) return;
     const cos = _v.dot(_f) / d;
     if (cos > bc) { bc = cos; best = e; bd = d; }
-  }
+  };
+  for (const e of enemies) if (!e.dead) scan(e);
+  if (isPvp()) for (const r of coop.players.values()) if (r.alive) scan(r); // 대결: 상대 플레이어가 표적
   aa.e = best;
   aa.d = bd;
   aa.vis = false;
@@ -832,7 +866,7 @@ function scanTarget(dt) {
     aa.y = chestY(best);
     aa.vis = losClear(c.x, c.y, c.z, best.pos.x, aa.y, best.pos.z);
     if (!aa.vis) {
-      aa.y = 1.66 - best.crouch * 0.37; // 몸통이 가려졌으면 머리
+      aa.y = (best.pid !== undefined ? best.pos.y : 0) + 1.66 - best.crouch * 0.37; // 몸통이 가려졌으면 머리
       aa.vis = losClear(c.x, c.y, c.z, best.pos.x, aa.y, best.pos.z);
     }
     _v.set(best.pos.x - c.x, aa.y - c.y, best.pos.z - c.z).normalize();
@@ -862,7 +896,7 @@ function handleLook(dt) {
   if (touch && aa.e && aa.vis && aa.ang < (assist.t > 0 ? 0.16 : 0.09)) {
     const c = camera.position, ex = aa.e.pos.x - c.x, ey = aa.y - c.y, ez = aa.e.pos.z - c.z;
     const active = lookT.size > 0 || input.fire || player.hspeed > 0.5 || vm.autoFiring;
-    const gain = assist.t > 0 ? 14 : (active ? 4.5 : 2.2) * (1 + vm.adsT * 0.4) * (1 - (aa.ang / 0.09) * 0.5);
+    const gain = (assist.t > 0 ? 14 : (active ? 4.5 : 2.2) * (1 + vm.adsT * 0.4) * (1 - (aa.ang / 0.09) * 0.5)) * (isPvp() ? 0.6 : 1); // 사람 상대로는 약하게
     const f = Math.min(1, gain * dt);
     player.yaw += angDiff(player.yaw, Math.atan2(-ex, -ez) - vm.ry) * f;
     player.pitch = clamp(player.pitch + (Math.atan2(ey, Math.hypot(ex, ez)) - vm.rp - player.pitch) * f, -1.45, 1.45);
@@ -962,6 +996,14 @@ function explode(x, y, z, ghost) {
     if (!losClear(x, y + 0.35, z, e.pos.x, 1.1, e.pos.z)) dmg *= 0.25;
     hits++;
     if (e.damage(dmg, 1, null, 0, { x, y, z, power: 2.5 + 4 * (1 - d / 7.5) })) kills++;
+  }
+  if (isPvp() && coop.started) for (const r of coop.players.values()) { // 대결: 폭발에 휘말린 다른 플레이어
+    if (!r.alive) continue;
+    const d = Math.hypot(r.pos.x - x, r.pos.y + 1.0 - y, r.pos.z - z);
+    if (d > 7.5) continue;
+    hits++;
+    pvpSendHit(r.pid, 110 * (1 - d / 7.5) * (losClear(x, y + 0.35, z, r.pos.x, r.pos.y + 1.1, r.pos.z) ? 1 : 0.25), 1);
+    r.struck(null);
   }
   if (hits) {
     hudS.hm = kills ? 0.35 : 0.18;
@@ -1234,7 +1276,10 @@ class Enemy {
       if (head) game.headshots++;
       feed(head ? `헤드샷 +${pts}` : `${T.label} +${pts}`, head);
     }
-    const rn = Math.random(), drop = rn < 0.38 ? 'ammo' : rn < 0.38 + (player.hp < 60 ? 0.3 : 0.1) ? 'med' : '';
+    // 자동 회복이 없으므로 의무 보급품이 전투 중 유일한 회복 수단: 가장 다친 사람의 체력이 낮을수록 잘 나온다
+    let low = 1;
+    for (const h of humans()) if (h.alive) low = Math.min(low, h === player ? player.hp / prog.maxHp : h.hp / 100);
+    const pm = low < 0.4 ? 0.36 : low < 0.75 ? 0.2 : 0.05, rn = Math.random(), drop = rn < pm ? 'med' : rn < pm + 0.36 ? 'ammo' : '';
     if (drop) addPickup(drop, this.pos.x, this.pos.z);
     if (coop.host) coopSendDie(this, part, dir, power, blast, clip, src && src.net ? src.pid : 0, drop, head);
   }
@@ -1816,8 +1861,9 @@ function clearSquad() {
   el.radio.classList.add('hidden');
 }
 
-// ───────────────────────── 협동 생존(네트워크)
-// 방장(번호 0)의 폰이 적 AI와 웨이브를 계산한다. 참가자는 자기 캐릭터만 직접 움직이고, 적은 방장이 보낸 상태로 그린다.
+// ───────────────────────── 네트워크 플레이: 협동 생존 / 대결
+// 협동 생존: 방장(번호 0)의 폰이 적 AI와 웨이브를 계산한다. 참가자는 자기 캐릭터만 직접 움직이고, 적은 방장이 보낸 상태로 그린다.
+// 대결: 적 AI 없이 플레이어끼리 싸운다. 맞혔는지는 쏜 사람의 폰이 판정해 방장을 거쳐 맞은 사람에게 알리고, 점수는 방장이 센다.
 //  - 상태(초당 12~15회, 잃어도 되는 값): 플레이어 위치·방향, 적 위치·자세, 적의 사격 표시
 //  - 사건(순서와 도착 보장): 입장·시작·웨이브·명중 보고·사살·피해·종료
 const COOP_RESPAWN = 10; // 쓰러진 뒤 복귀까지(초)
@@ -1847,10 +1893,9 @@ class RemotePlayer {
   constructor(pid) {
     this.net = true; this.pid = pid;
     const name = COOP_NAMES[pid] || '대원';
-    this.def = { id: 'p' + pid, name, short: name, hp: 100, mat: 'ally' };
-    try { this.body = MOCAP.ready ? new MocapBody(this.def.mat, 1) : new PuppetBody(0); }
-    catch (err) { this.body = new PuppetBody(0); }
-    scene.add(this.body.root);
+    this.def = { id: 'p' + pid, name, short: name, hp: 100, mat: isPvp() ? PVP_MATS[pid % PVP_MATS.length] : 'ally' };
+    this.mkBody();
+    this.lying = false; this.deadT = 0; this.fall = 1; this.hitDir = null; this.hitT = 0;
     const o = COOP_SPAWN[pid] || COOP_SPAWN[0];
     this.pos = new THREE.Vector3(START.x + o[0], 0, START.z + o[1]);
     this.eye = 1.62; this.hspeed = 0; this.yaw = 0; this.elev = 0;
@@ -1864,21 +1909,54 @@ class RemotePlayer {
     this.tag.textContent = name;
     this.body.animate(this, 0.016);
   }
+  mkBody() {
+    try { this.body = MOCAP.ready ? new MocapBody(this.def.mat, 1) : new PuppetBody(0); }
+    catch (err) { this.body = new PuppetBody(0); }
+    scene.add(this.body.root);
+  }
   get alive() { return !this.gone && this.up; }
+  get dead() { return !this.alive; }
   remove() {
     this.body.dispose(scene);
     this.gone = true;
     this.tag.classList.add('hidden');
   }
+  // 내 탄·폭발에 맞음(대결): 움찔하는 연출과, 쓰러질 때 쓸 방향을 기억해 둔다
+  struck(dir) {
+    this.flinch = 1;
+    this.flinchSide = Math.random() < 0.5 ? -1 : 1;
+    if (dir) { this.hitDir = { x: dir.x, y: dir.y, z: dir.z }; this.hitT = netNow(); }
+    if (!this.lying && this.body.playOver) this.body.playOver('HitChest', { peak: 0.7 });
+  }
+  // 대결: 쓰러지는 연출. 몸은 그 자리에 남고, 복귀하면 새 몸으로 바꾼다
+  fallDead() {
+    if (this.lying) return;
+    const d = this.hitDir && netNow() - this.hitT < 1 ? this.hitDir : { x: -Math.sin(this.bodyYaw), y: 0, z: -Math.cos(this.bodyYaw) };
+    this.lying = true; this.deadT = 0; this.fall = 1;
+    SFX.playAt('grunt', this.pos.x, this.pos.y + 1.5, this.pos.z, 0.9, rr(0.92, 1.05));
+    try { this.body.die(this, scene, { dir: d, power: 3, part: 1, blast: null, clip: null }); } catch (err) { /* 연출 실패는 넘긴다 */ }
+  }
+  revive() {
+    if (!this.lying) return;
+    this.lying = false;
+    this.body.dispose(scene);
+    this.mkBody();
+    this.buf.length = 0; // 복귀 지점은 멀리 떨어져 있다: 이전 위치와 잇지 않는다
+    this.crouch = 0; this.aim = 1; this.kick = 0; this.flinch = 0; this.pend = 0;
+  }
   // p: [번호, x, y, z, 좌우 각, 상하 각, 플래그(1 앉음, 2 살아 있음, 4 정조준), 무기, 체력, 사격 횟수]
   push(p) {
     this.raw = p;
-    pushSample(this.buf, { x: p[1], y: p[2], z: p[3], yaw: p[4], pitch: p[5] });
     const up = !!(p[6] & 2);
+    if (up !== this.up) {
+      this.up = up;
+      if (isPvp()) { if (up) this.revive(); else this.fallDead(); }
+      else feed(up ? `${this.def.name} 복귀` : `${this.def.name} 쓰러짐`);
+    }
+    pushSample(this.buf, { x: p[1], y: p[2], z: p[3], yaw: p[4], pitch: p[5] });
     this.crouchF = !!(p[6] & 1);
     this.widx = p[7];
     this.hp = p[8];
-    if (up !== this.up) { this.up = up; feed(up ? `${this.def.name} 복귀` : `${this.def.name} 쓰러짐`); }
     if (this.shotN >= 0) this.pend = Math.min(6, this.pend + ((p[9] - this.shotN) & 255));
     this.shotN = p[9];
   }
@@ -1902,6 +1980,7 @@ class RemotePlayer {
     SFX.playAt(w.sound, mx, my, mz, 0.8, rr(0.96, 1.04));
   }
   update(dt) {
+    if (this.lying) { this.deadT += dt; try { this.body.animateDead(this, dt); } catch (err) { /* 무시 */ } return; }
     const s = sampleAt(this.buf, netNow() - 0.1), x0 = this.pos.x, z0 = this.pos.z;
     if (s) {
       const a = s.a, b = s.b, k = s.k;
@@ -1999,6 +2078,157 @@ function coopPicked(pid) { // 보급을 고름. 방장은 모두 골랐으면 �
   if (all && game.between > 3) game.between = 3;
 }
 
+// ── 대결
+const pvpName = (pid) => COOP_NAMES[pid] || '대원';
+const pvpRow = (pid) => { let r = coop.sc.get(pid); if (!r) { r = [0, 0]; coop.sc.set(pid, r); } return r; };
+// 점수판 [번호, 킬, 데스]: 킬이 많은 순, 같으면 데스가 적은 순
+const pvpTable = () => [...coop.sc].map(([pid, r]) => [pid, r[0], r[1]]).sort((a, b) => b[1] - a[1] || a[2] - b[2] || a[0] - b[0]);
+function pvpSetTable(l) {
+  coop.sc.clear();
+  if (Array.isArray(l)) for (const q of l) coop.sc.set(q[0] | 0, [q[1] | 0, q[2] | 0]);
+}
+const cfgFrom = (c) => ({ mode: c && c.mode === 'pvp' ? 'pvp' : 'surv', map: c && PVP_MAPS.includes(c.map) ? c.map : 'yard', kt: c && PVP_KT.includes(c.kt) ? c.kt : 10 });
+// 내 탄·폭발이 다른 플레이어에게 맞았다 → 방장을 거쳐 그 사람의 폰으로
+function pvpSendHit(to, d, part) {
+  if (!coop.started) return;
+  coop.quietT = 0;
+  if (coop.host) pvpRouteHit(0, to, d, part);
+  else sendEv({ t: 'pv', to, d: r2(d), p: part });
+}
+function pvpRouteHit(by, to, d, part) { // 방장
+  if (!isPvp() || !coop.started || by === to) return;
+  d = clamp(+d || 0, 0, 400);
+  if (to === 0) { pvpTakeHit(by, d, part | 0); return; }
+  const link = NET.links.find((l) => l.pid === to);
+  if (link) sendEv({ t: 'pvh', by, d: r2(d), p: part | 0 }, link);
+}
+function pvpTakeHit(by, d, part) { // 맞은 사람의 폰
+  if (!isPvp() || !coop.started || !player.alive) return;
+  const src = coopEntity(by);
+  coop.quietT = 0;
+  hurtPlayer(d, src ? src.pos : player.pos, by, part === 2);
+}
+function pvpReportDeath(by, head) { // 쓰러진 사람의 폰 → 방장
+  coop.by = by;
+  if (coop.host) pvpOnDeath(0, by, head);
+  else sendEv({ t: 'pvd', by, h: head ? 1 : 0 });
+}
+function pvpOnDeath(v, by, head) { // 방장: 점수를 세고 모두에게 알린다
+  if (!isPvp() || !coop.started) return;
+  if (!coop.roster.includes(by)) by = v;
+  pvpRow(v)[1]++;
+  if (by !== v) pvpRow(by)[0]++;
+  const m = { t: 'pvk', by, v, h: head ? 1 : 0, sc: pvpTable() };
+  sendEv(m);
+  pvpOnKill(m);
+  if (by !== v && pvpRow(by)[0] >= coop.cfg.kt && coop.endT <= 0) coop.endT = 1.6; // 마지막 장면을 잠깐 보여 주고 끝낸다
+}
+function pvpOnKill(m) {
+  pvpSetTable(m.sc);
+  coop.quietT = -PVP_RESPAWN; // 위치 표식까지의 시간은 쓰러진 사람이 복귀한 뒤부터 다시 센다(모두 같은 때에)
+  const me = coop.pid;
+  if (m.by === me && m.v !== me) {
+    game.kills++;
+    if (m.h) game.headshots++;
+    feed(m.h ? `${pvpName(m.v)} 처치 · 헤드샷` : `${pvpName(m.v)} 처치`, !!m.h);
+    hudS.hm = 0.35;
+    el.hm.classList.add('kill');
+    SFX.play('head', 0.5, 0.9);
+  } else if (m.v === me) feed(m.by === me ? '자폭' : `${pvpName(m.by)}에게 당함`);
+  else feed(m.by === m.v ? `${pvpName(m.v)} 자폭` : `${pvpName(m.by)} → ${pvpName(m.v)}`);
+}
+// 다른 플레이어에게서 멀고 보이지 않는 자리
+function pvpSpawnPoint() {
+  let best = null, bs = -1e9;
+  for (let k = 0; k < 40; k++) {
+    const c = NAV.free[(Math.random() * NAV.free.length) | 0], x = cellX(c), z = cellZ(c);
+    let d = 60, seen = false;
+    for (const r of coop.players.values()) {
+      if (!r.alive) continue;
+      d = Math.min(d, Math.hypot(x - r.pos.x, z - r.pos.z));
+      if (!seen && losClear(x, 1.6, z, r.pos.x, r.pos.y + r.eye, r.pos.z)) seen = true;
+    }
+    const sc = Math.min(d, 40) + Math.random() * 6 - (seen ? 30 : 0) - (d < 12 ? 40 : 0);
+    if (sc > bs) { bs = sc; best = { x, z }; }
+  }
+  return best || { x: START.x, z: START.z };
+}
+function pvpSpawns(pids) { // 방장: 시작 자리를 서로 멀리 떨어뜨려 정한다
+  const pts = [];
+  for (const pid of pids) {
+    let best = [pid, START.x, START.z], bs = -1;
+    for (let k = 0; k < 60; k++) {
+      const c = NAV.free[(Math.random() * NAV.free.length) | 0], x = cellX(c), z = cellZ(c);
+      let d = pts.length ? 1e9 : Math.random();
+      for (const q of pts) d = Math.min(d, Math.hypot(x - q[1], z - q[2]));
+      if (pts.length) d = Math.min(d, 45) - Math.max(0, d - 55) * 0.5 + Math.random() * 4; // 45~55m쯤 떨어진 자리를 고른다: 더 멀면 서로 찾는 시간만 길어진다
+      if (d > bs) { bs = d; best = [pid, r2(x), r2(z)]; }
+    }
+    pts.push(best);
+  }
+  return pts;
+}
+function pvpPlace(p) { // 그 자리에 선다. 체력·탄약·수류탄은 새로
+  player.pos.set(p.x, 0, p.z);
+  player.vel.set(0, 0, 0);
+  // 맵 가운데 쪽을 보되, 바로 앞이 막혀 있으면(컨테이너 벽 등) 트인 쪽으로 돌려 세운다
+  const base = Math.atan2(-((B.x0 + B.x1) / 2 - p.x), -((B.z0 + B.z1) / 2 - p.z));
+  let yaw = base, open = -1;
+  for (const off of [0, 0.6, -0.6, 1.2, -1.2, 1.9, -1.9, Math.PI]) {
+    const a = base + off, free = rayWorld(p.x, 1.5, p.z, -Math.sin(a), 0, -Math.cos(a), 14) ? hit.t : 14;
+    if (free > open) { open = free; yaw = a; }
+    if (free >= 9) break;
+  }
+  player.yaw = yaw;
+  player.pitch = 0;
+  player.hp = prog.maxHp; player.alive = true; player.crouch = false; player.grounded = true; player.col.grounded = true; player.yOff = 0;
+  cam.roll = 0; cam.hurtRoll = 0;
+  W.ar.ammo = W.ar.mag; W.ar.reserve = 120; W.shotgun.ammo = W.shotgun.mag; W.shotgun.reserve = 18; W.dmr.ammo = W.dmr.mag; W.dmr.reserve = 20; W.pistol.ammo = W.pistol.mag;
+  vm.reloadT = 0;
+  gren.n = 1;
+  coop.safeT = 2; coop.downSec = -1;
+  if (coop.quietT > 0) coop.quietT = 0;
+  el.bCrouch.classList.remove('on');
+}
+function pvpRespawn() {
+  pvpPlace(pvpSpawnPoint());
+  if (game.state !== 'paused') setState('playing'); // 메뉴를 보고 있었다면 그대로 둔다
+  showMsg('복귀', '', 1.2);
+}
+function overReset() { // 종료 화면의 제목·항목 이름을 기본값으로
+  $('overTitle').textContent = '작전 종료';
+  $('oWaveL').textContent = '웨이브';
+  $('oScoreL').textContent = '점수';
+  $('btnOverLobby').classList.add('hidden');
+}
+function pvpShowOver(l) {
+  coop.started = false;
+  pvpSetTable(l);
+  l = pvpTable();
+  const rank = Math.max(0, l.findIndex((q) => q[0] === coop.pid)), mine = l[rank] || [coop.pid, 0, 0];
+  $('overTitle').textContent = rank === 0 ? '승리' : l.length <= 2 ? '패배' : `${rank + 1}위`;
+  $('oWaveL').textContent = '순위';
+  $('oScoreL').textContent = '데스';
+  $('oWave').textContent = `${rank + 1}/${l.length}`;
+  $('oScore').textContent = mine[2];
+  $('oKills').textContent = mine[1];
+  $('oHead').textContent = game.headshots;
+  $('oAcc').textContent = (game.shots ? Math.round((game.hits / game.shots) * 100) : 0) + '%';
+  $('overEyebrow').textContent = '대결 종료 · ' + l.map((q) => `${pvpName(q[0])} ${q[1]}`).join(' / ');
+  $('btnAgain').textContent = '다시 대결';
+  $('btnAgain').classList.toggle('hidden', !coop.host);
+  $('btnOverList').textContent = '방 나가기';
+  $('btnOverList').classList.remove('hidden');
+  $('btnOverLobby').classList.toggle('hidden', !coop.host);
+  $('overNote').textContent = coop.host ? '' : '방장이 다시 시작하거나 모드를 바꾸면 이어집니다.';
+  setState('over');
+}
+function pvpFinish() { // 방장: 누군가 목표 킬에 닿았다
+  const l = pvpTable();
+  sendEv({ t: 'pvo', sc: l });
+  pvpShowOver(l);
+}
+
 // ── 흐름
 function coopRespawn() {
   const o = COOP_SPAWN[coop.pid] || COOP_SPAWN[0];
@@ -2009,10 +2239,12 @@ function coopRespawn() {
   coop.safeT = 2.5; coop.downSec = -1;
   const w = W[vm.cur];
   if (w.reserve !== Infinity && w.reserve < w.mag) giveAmmo();
-  setState('playing');
+  if (game.state !== 'paused') setState('playing'); // 메뉴를 보고 있었다면 그대로 둔다
   showMsg('복귀', '', 1.4);
 }
-function coopBegin(gen) { // 모든 폰에서 같은 판을 새로 시작한다. gen: 방장이 매긴 판 번호
+// 모든 폰에서 같은 판을 새로 시작한다. gen: 방장이 매긴 판 번호, sp: (대결) 방장이 정한 시작 자리 [[번호, x, z]...]
+function coopBegin(gen, sp) {
+  const pv = isPvp();
   coop.gen = gen;
   coop.dead.clear();
   SFX.initAudio();
@@ -2023,25 +2255,55 @@ function coopBegin(gen) { // 모든 폰에서 같은 판을 새로 시작한다.
   clearSquad();
   coop.players.clear();
   coop.en.clear();
-  loadMap('yard', 'day');
+  loadMap(pv ? coop.cfg.map : 'yard', 'day');
   resetGame();
-  Object.assign(coop, { started: true, shots: [], snapSeq: -1, lastSnap: netNow(), stall: false, supplyT: 0, allDownT: 0, downSec: -1, safeT: 2, myShots: 0, lost: '' });
+  Object.assign(coop, { started: true, shots: [], snapSeq: -1, lastSnap: netNow(), stall: false, supplyT: 0, allDownT: 0, downSec: -1, safeT: 2, myShots: 0, lost: '', pkT: 8, endT: 0, by: -1, quietT: 0 });
   coop.picked.clear();
   for (const pid of coop.roster) coopAddRemote(pid);
-  const o = COOP_SPAWN[coop.pid] || COOP_SPAWN[0];
-  player.pos.set(START.x + o[0], 0, START.z + o[1]);
+  if (pv) {
+    game.between = 1e9; // 웨이브 없음
+    for (const k of ORDER) prog.owned[k] = true; // 모든 무기를 들고 시작
+    coop.sc.clear();
+    for (const pid of coop.roster) coop.sc.set(pid, [0, 0]);
+    if (sp) for (const q of sp) { const r = coop.players.get(q[0]); if (r) r.pos.set(q[1], 0, q[2]); }
+    const me = sp && sp.find((q) => q[0] === coop.pid);
+    pvpPlace(me ? { x: me[1], z: me[2] } : pvpSpawnPoint());
+    showMsg('대결', `먼저 ${coop.cfg.kt}킬 · ${MAPS[coop.cfg.map]}`, 2.8);
+  } else {
+    const o = COOP_SPAWN[coop.pid] || COOP_SPAWN[0];
+    player.pos.set(START.x + o[0], 0, START.z + o[1]);
+  }
   $('btnAgain').classList.remove('hidden');
   setState('playing');
-  feed(`협동 생존 · ${nPlayers()}명`);
+  feed(pv ? `대결 · ${nPlayers()}명` : `협동 생존 · ${nPlayers()}명`);
 }
 function coopHostStart() {
   if (!coop.on || !coop.host || !NET.code) return;
   const gen = coop.gen + 1;
-  sendEv({ t: 'go', g: gen });
-  coopBegin(gen);
+  let sp = null;
+  if (isPvp()) { loadMap(coop.cfg.map, 'day'); sp = pvpSpawns(coop.roster); }
+  sendEv({ t: 'go', g: gen, c: coop.cfg, sp });
+  coopBegin(gen, sp);
+}
+// 방은 그대로 두고 판만 끝내 로비로 돌아간다 (방장이 게임 중 메뉴·종료 화면에서 모드를 바꾸려 할 때)
+function coopToLobby(remote) {
+  if (!coop.on) return;
+  if (coop.host && !remote) sendEv({ t: 'lobby' });
+  coop.started = false;
+  for (const e of enemies) e.remove();
+  enemies.length = 0;
+  clearSquad();
+  coop.players.clear();
+  coop.en.clear();
+  SFX.suspend(true);
+  setState('coop');
+  lobShow('room');
+  lobStatus(coop.host ? '모드를 고르고 시작하세요.' : '방장이 로비로 돌아왔습니다. 시작하기를 기다리는 중');
 }
 function coopShowOver(eyebrow, m) {
   coop.started = false;
+  overReset();
+  $('btnOverLobby').classList.toggle('hidden', !coop.host || !!coop.lost);
   const mine = m && m.k.find((q) => q[0] === coop.pid);
   $('oWave').textContent = m ? m.w : game.wave;
   $('oScore').textContent = m ? m.s : game.score;
@@ -2072,6 +2334,8 @@ function coopEnd() { // 방을 떠난다
   Object.assign(coop, { on: false, host: false, started: false, pid: 0, roster: [], lost: '', stall: false, gen: 0 });
   coop.players.clear();
   coop.en.clear();
+  coop.sc.clear();
+  overReset();
   $('btnAgain').classList.remove('hidden');
   $('btnOverList').textContent = '작전 목록';
   $('overNote').textContent = '';
@@ -2081,16 +2345,29 @@ function coopEnd() { // 방을 떠난다
 }
 function coopUpdate(dt) {
   if (coop.safeT > 0) coop.safeT -= dt;
-  const t = netNow();
+  const t = netNow(), pv = isPvp();
+  if (pv) coop.quietT += dt;
   if (coop.host) {
-    if (t - coop.lastSend >= 1 / 12) { coop.lastSend = t; coopSendSnapshot(); }
+    if (t - coop.lastSend >= (pv ? 1 / 20 : 1 / 12)) { coop.lastSend = t; coopSendSnapshot(); }
+    if (pv) {
+      if (coop.endT > 0 && (coop.endT -= dt) <= 0) { pvpFinish(); return; }
+      if ((coop.pkT -= dt) <= 0) { // 보급품: 맵 어딘가에 주기적으로 놓는다(각자의 화면에 따로 놓이고, 각자 한 번씩 집을 수 있다)
+        coop.pkT = 13;
+        if (pickups.length < 4) {
+          const c = NAV.free[(Math.random() * NAV.free.length) | 0], m = { t: 'pk', k: Math.random() < 0.6 ? 2 : 1, x: r2(cellX(c)), z: r2(cellZ(c)) };
+          sendEv(m);
+          addPickup(m.k === 1 ? 'ammo' : 'med', m.x, m.z);
+        }
+      }
+      return;
+    }
     let anyUp = player.alive; // 전원이 동시에 쓰러져 있으면 끝
     for (const r of coop.players.values()) if (r.alive) anyUp = true;
     if (anyUp) coop.allDownT = 0;
     else if ((coop.allDownT += dt) > 1.5) coopOver();
     return;
   }
-  if (t - coop.lastSend >= 1 / 15) { coop.lastSend = t; sendSt(['p', ++coop.seq, coopMyState()]); }
+  if (t - coop.lastSend >= (pv ? 1 / 20 : 1 / 15)) { coop.lastSend = t; sendSt(['p', ++coop.seq, coopMyState()]); }
   if (coop.supplyT > 0 && (coop.supplyT -= dt) <= 0 && player.alive && game.state === 'playing') openSupply();
   const gap = t - coop.lastSnap;
   if (gap > 2.5 && !coop.stall) { coop.stall = true; showMsg('방장 응답 없음', '방장 폰의 화면이 꺼졌거나 연결이 불안정합니다', 4); }
@@ -2154,7 +2431,8 @@ function coopOnEvent(link, m) {
       while (coop.roster.includes(pid)) pid++;
       link.pid = pid;
       coop.roster.push(pid);
-      sendEv({ t: 'wel', pid, started: coop.started, g: coop.gen }, link);
+      if (coop.started && isPvp()) pvpRow(pid);
+      sendEv({ t: 'wel', pid, started: coop.started, g: coop.gen, c: coop.cfg, sc: isPvp() ? pvpTable() : 0 }, link);
       if (coop.started) { coopAddRemote(pid); feed(`${COOP_NAMES[pid]} 합류`); }
       coopRoster();
     } else if (m.t === 'hit') {
@@ -2167,19 +2445,28 @@ function coopOnEvent(link, m) {
       coopGhostGrenade(m);
       coopSendGren({ x: m.p[0], y: m.p[1], z: m.p[2] }, { x: m.v[0], y: m.v[1], z: m.v[2] }, link.pid);
     } else if (m.t === 'pick') coopPicked(link.pid);
+    else if (m.t === 'pv') { if (link.pid > 0) pvpRouteHit(link.pid, m.to | 0, m.d, m.p); }
+    else if (m.t === 'pvd') { if (link.pid > 0) pvpOnDeath(link.pid, m.by | 0, !!m.h); }
     return;
   }
   // 참가자
-  if (m.t === 'wel') { coop.pid = m.pid; lobStatus('방장이 시작하기를 기다리는 중'); if (m.started) coopBegin(m.g); }
-  else if (m.t === 'ros') {
+  if (m.t === 'wel') {
+    coop.pid = m.pid;
+    coop.cfg = cfgFrom(m.c);
+    lobStatus('방장이 시작하기를 기다리는 중');
+    lobRender();
+    if (m.started) { coopBegin(m.g, null); if (m.sc) pvpSetTable(m.sc); }
+  } else if (m.t === 'ros') {
     coop.roster = m.l.map((q) => q[0]);
     coop.info = m.l;
+    if (m.c && !coop.started) coop.cfg = cfgFrom(m.c);
     if (coop.started) {
       for (const pid of coop.roster) if (pid !== coop.pid && !coop.players.has(pid)) { coopAddRemote(pid); feed(`${COOP_NAMES[pid]} 합류`); }
       for (const pid of [...coop.players.keys()]) if (!coop.roster.includes(pid)) { feed(`${COOP_NAMES[pid]} 나감`); coopRemoveRemote(pid); }
     }
     lobRender();
-  } else if (m.t === 'go') coopBegin(m.g);
+  } else if (m.t === 'go') { coop.cfg = cfgFrom(m.c); coopBegin(m.g, Array.isArray(m.sp) ? m.sp : null); }
+  else if (m.t === 'lobby') coopToLobby(true);
   else if (m.t === 'ver') coopFail(`버전이 다릅니다. 방장 ${m.v}, 이 폰 ${VERSION}. 두 폰 모두 앱을 닫았다 다시 열어 같은 판으로 맞추세요.`);
   else if (m.t === 'full') coopFail('방이 가득 찼습니다(최대 4명).');
   else if (!coop.started) return;
@@ -2212,24 +2499,52 @@ function coopOnEvent(link, m) {
   } else if (m.t === 'hurt') hurtPlayer(+m.d || 0, { x: m.x, z: m.z });
   else if (m.t === 'gren') coopGhostGrenade(m);
   else if (m.t === 'over') coopShowOver('전원 쓰러짐', m);
+  else if (m.t === 'pvh') pvpTakeHit(m.by | 0, +m.d || 0, m.p | 0);
+  else if (m.t === 'pvk') pvpOnKill(m);
+  else if (m.t === 'pvo') pvpShowOver(m.sc);
+  else if (m.t === 'pk') addPickup(m.k === 1 ? 'ammo' : 'med', +m.x || 0, +m.z || 0);
 }
 function coopRoster() { // 방장: 명단(번호·핑·연결 경로)을 모두에게
   coop.info = [[0, -1, '']];
   for (const l of NET.links) if (l.pid > 0) coop.info.push([l.pid, Math.round(l.ping), l.route]);
-  sendEv({ t: 'ros', l: coop.info });
+  sendEv({ t: 'ros', l: coop.info, c: coop.cfg });
   lobRender();
 }
 
 // ── 로비 화면: 방 만들기 / 코드로 참가 / 명단
-const lob = { step: 'choose', entry: '', status: '' };
+const lob = { step: 'choose', entry: '', status: '', joinT: 0 };
 const NET_ERR = {
   noroom: '그 코드의 방을 찾지 못했습니다. 코드를 다시 확인하세요.',
   broker: '연결을 이어 주는 서버에 닿지 못했습니다. 인터넷 연결을 확인하고 다시 시도하세요.',
-  timeout: '연결하지 못했습니다. 두 폰이 서로 직접 닿지 못하는 통신망일 수 있습니다. 같은 와이파이에서 다시 시도해 보세요.',
+  timeout: '연결하지 못했습니다. 두 폰 사이에 직접 길이 열리지 않았습니다. 한 폰의 통신망을 바꿔(와이파이 ↔ 모바일 데이터) 다시 시도해 보세요.',
   browser: '이 브라우저에서는 협동 연결을 쓸 수 없습니다.',
   webrtc: '연결에 실패했습니다. 다시 시도하세요.',
   unknown: '연결에 실패했습니다. 다시 시도하세요.',
 };
+// 연결 실패 안내: 두 폰이 내놓은 주소 후보(진단)를 보고 원인과 해결책을 고른다. 진단 문자열은 그대로 덧붙여 보여 준다
+function netFailText(kind) {
+  if (kind !== 'timeout' && kind !== 'webrtc') return NET_ERR[kind] || NET_ERR.unknown;
+  const d = NET.lastDiag;
+  if (!d) return NET_ERR.timeout;
+  let why = '두 폰 사이에 직접 길이 열리지 않았습니다. 한 폰의 통신망을 바꿔(와이파이 ↔ 모바일 데이터) 다시 시도해 보세요.';
+  if (d.noLocal) why = '이 폰에서 연결에 쓸 주소를 얻지 못했습니다. 통신망이 게임 연결(UDP)을 막고 있는 것으로 보입니다. 다른 와이파이나 모바일 데이터로 다시 시도하세요.';
+  else if (d.noRemote) why = '방장 폰의 응답을 받지 못했습니다. 방장 폰에 방 화면이 켜져 있는지 확인하고 다시 시도하세요.';
+  else if (d.same) why = '두 폰이 같은 와이파이(같은 공유기)에 있는데, 이 와이파이에서는 폰끼리 직접 통신이 되지 않습니다. 한 폰의 와이파이를 끄고 모바일 데이터로 다시 시도하세요.';
+  else if (d.noPub) why = '이 폰의 통신망이 게임 연결(UDP)을 막고 있습니다. 다른 와이파이나 모바일 데이터로 다시 시도하세요.';
+  return `연결하지 못했습니다. ${why} [진단: ${d.code}]`;
+}
+const MODE_LABEL = { surv: '협동 생존', pvp: '대결' };
+function lobCfg() { // 모드·맵·목표 킬. 방장만 바꿀 수 있고 참가자에게는 방장이 고른 값이 보인다
+  const c = coop.cfg, pv = c.mode === 'pvp';
+  $('btnCoMode').querySelector('b').textContent = MODE_LABEL[c.mode];
+  $('btnCoMap').querySelector('b').textContent = MAPS[c.map];
+  $('btnCoKt').querySelector('b').textContent = `${c.kt}킬`;
+  $('btnCoMap').classList.toggle('hidden', !pv);
+  $('btnCoKt').classList.toggle('hidden', !pv);
+  for (const id of ['btnCoMode', 'btnCoMap', 'btnCoKt']) $(id).disabled = !coop.host;
+  $('coHelpS').classList.toggle('hidden', pv);
+  $('coHelpP').classList.toggle('hidden', !pv);
+}
 function lobStatus(t) {
   lob.status = t;
   $('coStatus').textContent = t;
@@ -2256,6 +2571,7 @@ function lobEntry() {
 }
 function lobRender() {
   if (game.state !== 'coop' || lob.step !== 'room') return;
+  lobCfg();
   const box = $('coList'), info = coop.info || [];
   box.textContent = '';
   for (const q of info) {
@@ -2296,7 +2612,7 @@ function coopWire() { // 전송 계층의 알림을 게임에 잇는다
     join(link) { if (!coop.host) { lobStatus('연결됨. 입장하는 중'); sendEv({ t: 'hi', v: VERSION }, link); } },
     leave(link) {
       if (!coop.on) return;
-      if (!coop.host) { coopFail(coop.started || coop.pid > 0 ? '방장과의 연결이 끊겼습니다.' : NET_ERR.timeout); return; }
+      if (!coop.host) { coopFail(coop.started || coop.pid > 0 ? '방장과의 연결이 끊겼습니다.' : netFailText('timeout')); return; }
       if (link.pid > 0) {
         coop.roster = coop.roster.filter((p) => p !== link.pid);
         if (coop.players.has(link.pid)) { feed(`${COOP_NAMES[link.pid]} 나감`); coopRemoveRemote(link.pid); }
@@ -2305,8 +2621,16 @@ function coopWire() { // 전송 계층의 알림을 게임에 잇는다
     },
     ev: coopOnEvent,
     st: coopOnState,
-    error(kind) { if (coop.on) coopFail(NET_ERR[kind] || NET_ERR.unknown); },
-    info() { if (coop.on && coop.host) coopRoster(); },
+    error(kind) { if (coop.on) coopFail(netFailText(kind)); },
+    // 방장: 누군가 들어오려 했지만 끝내 이어지지 못했다
+    miss(d) {
+      if (!coop.on || !coop.host || game.state !== 'coop') return;
+      lobStatus(`들어오려던 폰과 연결되지 않았습니다. ${d && d.same ? '같은 와이파이에서 폰끼리 직접 통신이 막힌 것으로 보입니다. 한 폰의 와이파이를 끄고 모바일 데이터로 다시 시도하세요.' : '한 폰의 통신망을 바꿔(와이파이 ↔ 모바일 데이터) 다시 시도해 보세요.'}${d ? ` [진단: ${d.code}]` : ''}`);
+    },
+    info() {
+      if (coop.on && coop.host) coopRoster();
+      else if (coop.on && coop.pid < 0 && game.state === 'coop' && lob.step === 'room') lobStatus(`연결하는 중 · ${Math.max(1, Math.round((performance.now() - lob.joinT) / 1000))}초 (길어도 20초 안에 결과가 나옵니다)`);
+    },
   };
 }
 function coopHost() {
@@ -2322,11 +2646,12 @@ function coopHost() {
 function coopJoin(code) {
   SFX.initAudio();
   if (coop.on) coopEnd();
-  Object.assign(coop, { on: true, host: false, started: false, pid: -1, roster: [], info: [], lost: '' });
+  Object.assign(coop, { on: true, host: false, started: false, pid: -1, roster: [], info: [], lost: '', cfg: cfgFrom(null) });
   $('coErr').textContent = '';
   coopWire();
   if (game.state !== 'coop') { for (const e of enemies) e.remove(); enemies.length = 0; clearSquad(); setState('coop'); }
   netJoin(code);
+  lob.joinT = performance.now();
   lobShow('room');
   $('coCode').textContent = code;
   lobStatus('연결하는 중');
@@ -2338,10 +2663,13 @@ $('btnCoBack').addEventListener('click', () => setState('menu'));
 $('btnCoPadBack').addEventListener('click', () => lobShow('choose'));
 $('btnCoGo').addEventListener('click', () => { if (lob.entry.length === 5) coopJoin(lob.entry); });
 $('btnCoStart').addEventListener('click', coopHostStart);
+$('btnCoMode').addEventListener('click', () => { if (!coop.host) return; coop.cfg.mode = coop.cfg.mode === 'pvp' ? 'surv' : 'pvp'; coopRoster(); });
+$('btnCoMap').addEventListener('click', () => { if (!coop.host) return; coop.cfg.map = PVP_MAPS[(PVP_MAPS.indexOf(coop.cfg.map) + 1) % PVP_MAPS.length]; coopRoster(); });
+$('btnCoKt').addEventListener('click', () => { if (!coop.host) return; coop.cfg.kt = PVP_KT[(PVP_KT.indexOf(coop.cfg.kt) + 1) % PVP_KT.length]; coopRoster(); });
 $('btnCoLeave').addEventListener('click', () => { coopEnd(); lobShow('choose'); });
 $('btnCoShare').addEventListener('click', () => {
   const url = location.origin + location.pathname + '#j=' + NET.code;
-  if (navigator.share) navigator.share({ title: 'YARD ZERO 협동', text: `YARD ZERO 협동 생존 · 방 코드 ${NET.code}`, url }).catch(() => {});
+  if (navigator.share) navigator.share({ title: 'YARD ZERO 멀티플레이', text: `YARD ZERO ${MODE_LABEL[coop.cfg.mode]} · 방 코드 ${NET.code}`, url }).catch(() => {});
   else navigator.clipboard.writeText(url).then(() => lobStatus('초대 링크를 복사했습니다. 친구에게 붙여 보내세요.')).catch(() => {});
 });
 for (const k of $('coKeys').querySelectorAll('[data-k]')) {
@@ -2570,9 +2898,9 @@ function updateCampaign(dt) {
 // 작전 HUD: 목표 문구, 지점 표식, 분대 상태, 이름표, 무전
 let campHudT = 0;
 function updateCampHud(dt) {
-  const on = (camp.on || coop.on) && live();
+  const on = (camp.on || coop.on) && live(), pv = isPvp();
   el.obj.classList.toggle('hidden', !on || !camp.on || !camp.s);
-  el.squad.classList.toggle('hidden', !on);
+  el.squad.classList.toggle('hidden', !on || pv);
   if (!on) { el.mk.classList.add('hidden'); for (const t of el.tags.children) t.classList.add('hidden'); return; }
   // 무전: 한 줄씩 차례로
   if (radioT > 0) { radioT -= dt; if (radioT <= 0) el.radio.classList.add('hidden'); }
@@ -2608,6 +2936,12 @@ function updateCampHud(dt) {
       }
     }
     el.sqOw.classList.toggle('hidden', !overwatch.on);
+    if (pv) { // 대결: 내 킬 / 목표, 선두(내가 선두면 2위)
+      const tb = pvpTable(), mine = coop.sc.get(coop.pid) || [0, 0], top = tb[0], nx = tb[1];
+      setTxt('waveTxt', `대결 ${mine[0]}/${coop.cfg.kt}`);
+      setTxt('enemyTxt', !top || tb.length < 2 ? '상대 없음' : top[0] === coop.pid ? `2위 ${pvpName(nx[0])} ${nx[1]}` : `선두 ${pvpName(top[0])} ${top[1]}`);
+      setTxt('scoreTxt', String(mine[0]));
+    }
     if (coop.on) setTxt('hudVer', VERSION + (coop.host ? ' · 방장' : NET.links[0] && NET.links[0].ping >= 0 ? ` · ${Math.round(NET.links[0].ping)}ms` : ''));
   }
   // 폭약 설치 진행
@@ -2623,6 +2957,10 @@ function updateCampHud(dt) {
   if (!m && s && s.type === 'plant') { // 가장 가까운 미설치 지점
     let bd = 1e9;
     for (const p of st.sites) { if (p.done) continue; const d = Math.hypot(p.x - player.pos.x, p.z - player.pos.z); if (d < bd) { bd = d; m = p; } }
+  }
+  if (pv && player.alive && coop.quietT > PVP_QUIET) { // 대결: 한동안 교전이 없으면 가장 가까운 상대의 위치를 알려 준다(숨바꼭질 방지)
+    let bd = 1e9;
+    for (const r of coop.players.values()) { if (!r.alive) continue; const d = Math.hypot(r.pos.x - player.pos.x, r.pos.z - player.pos.z); if (d < bd) { bd = d; m = r.pos; } }
   }
   if (m) {
     _v.set(m.x, (m.y || 0) + 1.5, m.z);
@@ -2647,7 +2985,7 @@ function updateCampHud(dt) {
     const d = _v.distanceTo(camera.position);
     _w.copy(_v).applyMatrix4(camera.matrixWorldInverse);
     _v.project(camera);
-    const vis = _w.z < 0 && d < 80 && Math.abs(_v.x) < 1.05 && Math.abs(_v.y) < 1.05;
+    const vis = !pv && _w.z < 0 && d < 80 && Math.abs(_v.x) < 1.05 && Math.abs(_v.y) < 1.05; // 대결에서는 이름표를 띄우지 않는다(벽 너머 위치가 드러난다)
     a.tag.classList.toggle('hidden', !vis);
     if (vis) {
       a.tag.style.transform = `translate(${((_v.x * 0.5 + 0.5) * LW).toFixed(1)}px,${((-_v.y * 0.5 + 0.5) * LH).toFixed(1)}px)`;
@@ -2716,7 +3054,7 @@ function updatePickups(dt) {
     p.mesh.rotation.y += dt * 1.2;
     let take = false;
     if (Math.hypot(p.x - player.pos.x, p.z - player.pos.z) < 1.2 && player.pos.y < 1) {
-      if (p.type === 'ammo' && giveAmmo()) { feed('탄약 보급'); take = true; }
+      if (p.type === 'ammo' && (giveAmmo() || (isPvp() && gren.n < 2))) { if (isPvp()) gren.n = Math.min(2, gren.n + 1); feed('탄약 보급'); take = true; }
       else if (p.type === 'med' && player.hp < prog.maxHp) { player.hp = Math.min(prog.maxHp, player.hp + 50); feed('체력 +50'); take = true; }
       if (take) SFX.play('pickup', 0.5);
     }
@@ -2808,13 +3146,14 @@ function updateDeath(dt) {
   player.vel.z = damp(player.vel.z, 0, 6, dt);
   player.hspeed = 0;
   vm.adsT = Math.max(0, vm.adsT - dt * 6);
-  if (coop.on) { // 협동: 끝나지 않고 잠시 뒤 출발 지점에서 복귀. 전원이 쓰러졌는지는 방장이 판정한다
-    const left = Math.ceil(COOP_RESPAWN - game.dieT);
-    if (left <= 0) coopRespawn();
-    else if (left !== coop.downSec) { coop.downSec = left; showMsg('쓰러짐', `${left}초 뒤 출발 지점에서 복귀`, 1.3); }
+  if (coop.on) { // 협동: 끝나지 않고 잠시 뒤 출발 지점에서 복귀(전원이 쓰러졌는지는 방장이 판정). 대결: 잠시 뒤 다른 자리에서 복귀
+    const pv = isPvp(), left = Math.ceil((pv ? PVP_RESPAWN : COOP_RESPAWN) - game.dieT);
+    if (left <= 0) { if (pv) pvpRespawn(); else coopRespawn(); }
+    else if (left !== coop.downSec) { coop.downSec = left; showMsg('쓰러짐', pv ? `${coop.by >= 0 && coop.by !== coop.pid ? pvpName(coop.by) + '에게 당함 · ' : ''}${left}초 뒤 복귀` : `${left}초 뒤 출발 지점에서 복귀`, 1.3); }
     return;
   }
   if (game.dieT > 1.9) {
+    overReset();
     if (!camp.on && game.score > game.best) { game.best = game.score; store.set('best', game.best); }
     $('oWave').textContent = game.wave;
     $('oScore').textContent = game.score;
@@ -2839,8 +3178,14 @@ function keepAwake(on) {
     } else if (wake.lock) { const l = wake.lock; wake.lock = null; l.release().catch(() => {}); }
   } catch (e) { /* 미지원 */ }
 }
+// 휴대폰의 '뒤로' 동작(가장자리 쓸기·뒤로 버튼): 게임 중에는 앱을 나가지 않고 메뉴를 연다. 기록 한 칸을 미리 쌓아 두었다가 그 칸이 빠질 때 메뉴를 띄운다
+function armBack() {
+  try { if (!(history.state && history.state.yz)) history.pushState({ yz: 1 }, ''); } catch (e) { /* 기록을 못 쓰는 환경(미리보기 등) */ }
+}
+window.addEventListener('popstate', () => { if (game.state === 'playing' || game.state === 'dying') pauseGame(); });
 function setState(s) {
   game.state = s;
+  if (s === 'playing') armBack();
   keepAwake(s === 'playing' || s === 'dying' || s === 'supply' || (coop.on && s !== 'menu'));
   el.menu.classList.toggle('hidden', s !== 'menu');
   el.pause.classList.toggle('hidden', s !== 'paused');
@@ -2852,10 +3197,10 @@ function setState(s) {
   el.hud.classList.toggle('hidden', s === 'menu' || s === 'over' || s === 'eps' || s === 'epdone' || s === 'coop');
   if (s !== 'playing' && s !== 'dying') updateCampHud(0);
   el.touch.classList.toggle('hidden', s !== 'playing');
-  el.bPause.classList.toggle('hidden', s !== 'playing');
+  el.bPause.classList.toggle('hidden', !(s === 'playing' || (s === 'dying' && coop.on && coop.started))); // 협동·대결에서는 쓰러져 있는 동안에도 메뉴를 부를 수 있다
   if (s !== 'playing') {
     releaseInput();
-    if (document.pointerLockElement) document.exitPointerLock();
+    if (s !== 'dying' && document.pointerLockElement) document.exitPointerLock();
   }
   el.bestTxt.textContent = game.best;
 }
@@ -2870,10 +3215,15 @@ function startGame() { // 생존 모드: 야드에서 끝없는 웨이브
   resetGame();
   setState('playing');
 }
+// 게임 중 메뉴. 혼자 할 때는 게임이 멈추고, 협동·대결에서는 멈추지 않는다(쓰러져 있는 동안에도 부를 수 있다)
 function pauseGame() {
-  if (game.state !== 'playing') return;
-  $('pauseBrief').textContent = camp.on ? `작전 ${camp.idx + 1} · ${camp.ep.title}: ${camp.ep.brief}` : coop.on ? `협동 생존 · 방 ${NET.code} · ${nPlayers()}명. 이 화면을 띄워도 게임은 멈추지 않습니다.` : '';
+  if (game.state !== 'playing' && !(coop.on && coop.started && game.state === 'dying')) return;
+  const net = coop.on ? (isPvp() ? `대결 · 방 ${NET.code} · ${pvpTable().map((q) => `${pvpName(q[0])} ${q[1]}`).join(' / ')} · 목표 ${coop.cfg.kt}킬.` : `협동 생존 · 방 ${NET.code} · ${nPlayers()}명.`) + ' 이 화면을 띄워도 게임은 멈추지 않습니다.' : '';
+  $('pauseTitle').textContent = coop.on ? '메뉴' : '일시정지';
+  $('pauseTag').textContent = coop.on ? '게임 진행 중' : '작전 보류';
+  $('pauseBrief').textContent = camp.on ? `작전 ${camp.idx + 1} · ${camp.ep.title}: ${camp.ep.brief}` : net;
   $('btnRestart').classList.toggle('hidden', coop.on && !coop.host);
+  $('btnLobby').classList.toggle('hidden', !(coop.on && coop.host));
   $('btnQuit').textContent = coop.on ? '방 나가기' : '메뉴로';
   setState('paused');
   if (!coop.on) SFX.suspend(true);
@@ -2881,7 +3231,7 @@ function pauseGame() {
 function resumeGame() {
   if (game.state !== 'paused') return;
   SFX.suspend(false);
-  setState('playing');
+  setState(coop.on && !player.alive ? 'dying' : 'playing');
   last = performance.now();
 }
 
@@ -3013,7 +3363,7 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   input.keys[e.code] = true;
-  if (e.code === 'Escape' || e.code === 'KeyP') { if (game.state === 'playing') pauseGame(); else if (game.state === 'paused') resumeGame(); return; }
+  if (e.code === 'Escape' || e.code === 'KeyP') { if (game.state === 'paused') resumeGame(); else pauseGame(); return; }
   if (game.state === 'supply') { if (/^Digit[1-3]$/.test(e.code)) pickSupply(+e.code.slice(5) - 1); return; }
   if (game.state !== 'playing') return;
   if (e.code === 'Space') { input.jump = true; e.preventDefault(); }
@@ -3074,6 +3424,8 @@ $('btnQuit').addEventListener('click', quitToMenu);
 $('btnNextEp').addEventListener('click', () => startEpisode(camp.idx + 1));
 $('btnEpList').addEventListener('click', () => { quitToMenu(); openEpisodes(); });
 $('btnResume').addEventListener('click', resumeGame);
+$('btnLobby').addEventListener('click', () => coopToLobby());
+$('btnOverLobby').addEventListener('click', () => coopToLobby());
 el.bPause.addEventListener('click', pauseGame);
 $('btnQual').addEventListener('click', cycleQuality);
 $('btnQual2').addEventListener('click', cycleQuality);
@@ -3142,6 +3494,7 @@ function update(dt) {
   for (let i = allies.length - 1; i >= 0; i--) if (allies[i].gone) allies.splice(i, 1);
   updateOverwatch(dt);
   if (camp.on) { if (player.alive) updateCampaign(dt); }
+  else if (isPvp()) { /* 대결: 웨이브 없음 */ }
   else if (coop.on ? coop.host : player.alive) updateWaves(dt);
   if (player.alive) updatePickups(dt);
   if (coop.on) coopUpdate(dt);
@@ -3211,4 +3564,4 @@ setState('menu');
 requestAnimationFrame(frame);
 
 // 자동 검증용 훅
-window.__yz = { step: (n, dt) => { for (let i = 0; i < n && live(); i++) update(dt); }, coop, NET, humans, coopHost, coopJoin, coopHostStart, coopEnd, lob, RemotePlayer, chestY, camp, allies, overwatch, EPISODES, SQUAD, startEpisode, squadJoin, squadLeave, squadHold, squadFollow, setOverwatch, openEpisodes, quitToMenu, radioQ, store, loadMap, applyEnv, ENVS, WORLD, B, START, rayWorld, losClear, blockedAt, findPath, prog, openSupply, pickSupply, applySupply, SFX, WH, dust, sparks, TYPES, gren, throwGrenade, explode, ORDER, MOCAP, aa, VM, scene, colliders, toggleRot, game, player, enemies, input, vm, W, opt, dbg, renderer, camera, pickups, spawnEnemy, startGame, hurtPlayer, switchWeapon, startReload, applyQuality, NAV };
+window.__yz = { step: (n, dt) => { for (let i = 0; i < n && live(); i++) update(dt); }, coop, NET, isPvp, pvpTable, coopToLobby, pauseGame, resumeGame, netFailText, addPickup, humans, coopHost, coopJoin, coopHostStart, coopEnd, lob, RemotePlayer, chestY, camp, allies, overwatch, EPISODES, SQUAD, startEpisode, squadJoin, squadLeave, squadHold, squadFollow, setOverwatch, openEpisodes, quitToMenu, radioQ, store, loadMap, applyEnv, ENVS, WORLD, B, START, rayWorld, losClear, blockedAt, findPath, prog, openSupply, pickSupply, applySupply, SFX, WH, dust, sparks, TYPES, gren, throwGrenade, explode, ORDER, MOCAP, aa, VM, scene, colliders, toggleRot, game, player, enemies, input, vm, W, opt, dbg, renderer, camera, pickups, spawnEnemy, startGame, hurtPlayer, switchWeapon, startReload, applyQuality, NAV };

@@ -184,6 +184,9 @@ body.portrait .cards.eplist{grid-template-columns:repeat(2,minmax(0,1fr))}
 .key{background:rgba(18,21,23,.82);color:var(--ink);border:1px solid var(--line);border-radius:3px;font:700 clamp(18px,5.4vmin,24px)/1 var(--body);padding:.62em 0;cursor:pointer;touch-action:manipulation}
 .key:active{border-color:var(--amber);transform:translateY(1px)}
 .go:disabled{opacity:.4;cursor:default}
+#coCfg{margin-top:12px}
+#coCfg .ghost:disabled{border-style:dashed;cursor:default;color:var(--dim)}
+#coErr,#coStatus{max-width:46ch}
 .corow{display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid var(--line);font:500 clamp(14px,3.8vmin,18px)/1.2 var(--body)}
 .corow b{color:#8fd6ff;font-weight:700}
 .corow span{color:var(--dim);font-variant-numeric:tabular-nums}
@@ -233,18 +236,18 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
   <div class="btn" id="bCrouch" data-btn="crouch" aria-label="앉기"><svg viewBox="0 0 24 24"><path d="M5 10l7 7 7-7"/><path d="M5 20h14"/></svg></div>
   <div id="ammo" data-btn="swap" aria-label="무기 교체"><b id="ammoN">30</b><span id="ammoR">/ 150</span><em id="wName">돌격소총</em></div>
 </div>
-<button id="bPause" class="hidden" aria-label="일시정지"><svg viewBox="0 0 16 16"><rect x="2.5" y="2" width="4" height="12"/><rect x="9.5" y="2" width="4" height="12"/></svg></button>
+<button id="bPause" class="hidden" aria-label="메뉴"><svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="2"/><rect x="2" y="7" width="12" height="2"/><rect x="2" y="11" width="12" height="2"/></svg></button>
 
 <div id="menu" class="overlay">
   <div class="wrap">
     <div>
       <p class="eyebrow"><b id="verTop">v0.0</b> · YZRU 261111 0 · 22G1</p>
       <h1>YARD ZERO</h1>
-      <p class="tag">항만 일대에서 이어지는 작전. 팀원이 합류하고 흩어지는 에피소드를 차례로 진행하거나, 혼자 또는 친구와 웨이브를 막아내세요.</p>
+      <p class="tag">항만 일대에서 이어지는 작전. 팀원이 합류하고 흩어지는 에피소드를 차례로 진행하거나, 친구와 함께 웨이브를 막고 서로 맞붙어 보세요.</p>
       <div class="row">
         <button class="go" id="btnCamp">작전</button>
         <button class="ghost" id="btnStart">생존 모드</button>
-        <button class="ghost" id="btnCoop">협동</button>
+        <button class="ghost" id="btnCoop">멀티플레이</button>
         <span class="best">최고 기록 <b id="bestTxt">0</b>점</span>
       </div>
       <div class="row">
@@ -272,12 +275,14 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
         <dt>보급</dt><dd>웨이브나 단계를 넘길 때 무기·강화 중 하나 선택</dd>
         <dt>팀원</dt><dd>하늘색 이름표. 알아서 따라오며 교전</dd>
         <dt>수류탄 버튼</dt><dd>던지고 2.6초 뒤 폭발</dd>
+        <dt>체력</dt><dd>저절로 차지 않음. 의무 보급품과 보급 선택으로 회복</dd>
+        <dt>오른쪽 위 ☰</dt><dd>게임 중 메뉴. 감도·소리·나가기</dd>
       </dl>
       <dl class="kb">
         <dt>W A S D</dt><dd>이동. Shift 질주, C 앉기, Space 점프</dd>
         <dt>마우스</dt><dd>조준. 왼쪽 사격, 오른쪽 정조준</dd>
         <dt>R · Q · G</dt><dd>재장전 · 무기 교체(1~4 직접 선택) · 수류탄</dd>
-        <dt>Esc</dt><dd>일시정지</dd>
+        <dt>Esc</dt><dd>게임 중 메뉴</dd>
       </dl>
       <p class="foot hidden" id="iosHint">Safari 공유 버튼에서 "홈 화면에 추가"를 누르면 앱처럼 설치됩니다</p>
       <p class="foot" id="verTxt">v0.1</p>
@@ -288,10 +293,10 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
 <div id="pause" class="overlay hidden">
   <div class="wrap">
     <div>
-      <p class="eyebrow">작전 보류 · <span id="pauseVer"></span></p>
-      <h2>일시정지</h2>
+      <p class="eyebrow"><span id="pauseTag">작전 보류</span> · <span id="pauseVer"></span></p>
+      <h2 id="pauseTitle">일시정지</h2>
       <p class="tag" id="pauseBrief"></p>
-      <div class="row"><button class="go" id="btnResume">계속하기</button><button class="ghost" id="btnRestart">처음부터 다시</button><button class="ghost" id="btnQuit">메뉴로</button></div>
+      <div class="row"><button class="go" id="btnResume">계속하기</button><button class="ghost" id="btnRestart">처음부터 다시</button><button class="ghost hidden" id="btnLobby">로비로 (모드 바꾸기)</button><button class="ghost" id="btnQuit">메뉴로</button></div>
     </div>
     <div>
       <div class="row" style="margin-top:0">
@@ -335,11 +340,11 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
 <div id="coop" class="overlay hidden">
   <div class="wrap">
     <div>
-      <p class="eyebrow">협동 생존 · 2~4명</p>
-      <h2>협동</h2>
+      <p class="eyebrow">네트워크 플레이 · 2~4명</p>
+      <h2>멀티플레이</h2>
       <p id="coErr"></p>
       <div id="coChoose">
-        <p class="tag">한 명이 방을 만들고, 나머지는 방 코드로 들어옵니다.</p>
+        <p class="tag">한 명이 방을 만들고, 나머지는 방 코드로 들어옵니다. 방장이 협동 생존과 대결 중에서 고릅니다.</p>
         <div class="row"><button class="go" id="btnCoHost">방 만들기</button><button class="ghost" id="btnCoJoin">코드로 참가</button><button class="ghost" id="btnCoBack">뒤로</button></div>
       </div>
       <div id="coPad" class="hidden">
@@ -351,6 +356,7 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
         <p class="best" style="margin-top:14px">방 코드</p>
         <p class="cocode" id="coCode">·····</p>
         <p class="best" id="coStatus"></p>
+        <div class="row" id="coCfg"><button class="ghost" id="btnCoMode">모드 <b>협동 생존</b></button><button class="ghost" id="btnCoMap">맵 <b>컨테이너 야드</b></button><button class="ghost" id="btnCoKt">목표 <b>10킬</b></button></div>
         <div class="row"><button class="go" id="btnCoStart">시작</button><button class="ghost" id="btnCoShare">초대 링크 공유</button><button class="ghost" id="btnCoLeave">방 나가기</button></div>
       </div>
     </div>
@@ -362,12 +368,21 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
         <span></span><button class="key" data-k="0">0</button><button class="key" data-k="del" aria-label="지우기">⌫</button>
       </div>
       <div id="coSide" class="hidden"><div id="coList"></div></div>
-      <dl id="coHelp" style="margin-top:14px">
-        <dt>적</dt><dd>방을 만든 폰이 계산. 그 폰의 화면이 꺼지면 모두 멈춤</dd>
-        <dt>적의 수</dt><dd>사람이 늘수록 많아짐</dd>
-        <dt>쓰러지면</dt><dd>10초 뒤 출발 지점에서 복귀. 전원이 함께 쓰러지면 끝</dd>
-        <dt>보급</dt><dd>웨이브 사이에 각자 하나씩. 게임은 멈추지 않음</dd>
-      </dl>
+      <div id="coHelp" style="margin-top:14px">
+        <dl id="coHelpS">
+          <dt>적</dt><dd>방을 만든 폰이 계산. 그 폰의 화면이 꺼지면 모두 멈춤</dd>
+          <dt>적의 수</dt><dd>사람이 늘수록 많아짐</dd>
+          <dt>쓰러지면</dt><dd>10초 뒤 출발 지점에서 복귀. 전원이 함께 쓰러지면 끝</dd>
+          <dt>보급</dt><dd>웨이브 사이에 각자 하나씩. 게임은 멈추지 않음</dd>
+        </dl>
+        <dl id="coHelpP" class="hidden">
+          <dt>대결</dt><dd>모두가 서로의 적(개인전). 먼저 목표 킬에 닿으면 승리</dd>
+          <dt>무기</dt><dd>네 가지를 모두 들고 시작. 탄약 표시를 눌러 교체</dd>
+          <dt>쓰러지면</dt><dd>4초 뒤 상대와 떨어진 자리에서 복귀. 2초 동안 보호</dd>
+          <dt>보급품</dt><dd>맵 곳곳에 주기적으로 놓임. 체력은 저절로 차지 않음</dd>
+          <dt>위치 표식</dt><dd>15초 동안 교전이 없으면 가장 가까운 상대의 위치가 표시됨</dd>
+        </dl>
+      </div>
     </div>
   </div>
 </div>
@@ -394,16 +409,16 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
   <div class="wrap">
     <div>
       <p class="eyebrow" id="overEyebrow">전사</p>
-      <h2>작전 종료</h2>
+      <h2 id="overTitle">작전 종료</h2>
       <div class="stats">
-        <div><b id="oWave">1</b><span class="lbl">웨이브</span></div>
-        <div><b id="oScore">0</b><span class="lbl">점수</span></div>
+        <div><b id="oWave">1</b><span class="lbl" id="oWaveL">웨이브</span></div>
+        <div><b id="oScore">0</b><span class="lbl" id="oScoreL">점수</span></div>
         <div><b id="oKills">0</b><span class="lbl">사살</span></div>
         <div><b id="oHead">0</b><span class="lbl">헤드샷</span></div>
         <div><b id="oAcc">0%</b><span class="lbl">명중률</span></div>
       </div>
       <p class="best" id="overNote" style="margin-top:14px"></p>
-      <div class="row"><button class="go" id="btnAgain">다시 도전</button><button class="ghost hidden" id="btnOverList">작전 목록</button></div>
+      <div class="row"><button class="go" id="btnAgain">다시 도전</button><button class="ghost hidden" id="btnOverLobby">로비로 (모드 바꾸기)</button><button class="ghost hidden" id="btnOverList">작전 목록</button></div>
     </div>
     <div></div>
   </div>
