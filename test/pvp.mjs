@@ -81,14 +81,14 @@ try {
   // 2. 로비: 모드·맵·목표 킬. 방장이 바꾸면 참가자 화면에도 반영, 참가자는 바꿀 수 없다
   out.lobby0 = { A: await lobby(A), B: await lobby(B) };
   check('default mode surv', out.lobby0.A.mode === '협동 생존' && out.lobby0.B.mode === '협동 생존' && out.lobby0.A.mapHidden && !out.lobby0.A.disabled && out.lobby0.B.disabled, out.lobby0);
-  await A.tap('#btnCoMode');
+  await A.tap('#btnCoMode'); await A.tap('#btnCoMode'); // 협동 생존 → 협동 임무 → 대결 (개인전)
   await A.tap('#btnCoMap'); // 야드 → 부두
   for (let i = 0; i < 3; i++) await A.tap('#btnCoKt'); // 10 → 15 → 20 → 5
   await B.waitForFunction(() => document.querySelector('#btnCoKt b').textContent === '5킬', null, { timeout: 8000 });
   await B.evaluate(() => document.getElementById('btnCoMode').click()); // 참가자가 눌러도 바뀌지 않는다
   await sleep(300);
   out.lobby1 = { A: await lobby(A), B: await lobby(B) };
-  check('pvp cfg synced', out.lobby1.B.mode === '대결' && out.lobby1.B.map === '부두' && out.lobby1.B.kt === '5킬' && !out.lobby1.B.mapHidden && out.lobby1.B.helpP && out.lobby1.A.mode === '대결', out.lobby1);
+  check('pvp cfg synced', out.lobby1.B.mode === '대결 (개인전)' && out.lobby1.B.map === '부두' && out.lobby1.B.kt === '5킬' && !out.lobby1.B.mapHidden && out.lobby1.B.helpP && out.lobby1.A.mode === '대결 (개인전)', out.lobby1);
   await A.tap('#btnCoMap'); await A.tap('#btnCoMap'); // 부두 → 차량기지 → 야드
   await B.waitForFunction(() => document.querySelector('#btnCoMap b').textContent === '컨테이너 야드', null, { timeout: 8000 });
   await A.screenshot({ path: 'test/pvp-lobby-host.png' });
@@ -153,7 +153,7 @@ try {
   await B.tap('#btnResume');
   const m3 = await st(B);
   out.menuWhileDown = { m1, m2, after: { state: m3.state, alive: m3.alive, pos: m3.pos }, distFromA: r1(Math.hypot(m3.pos[0] - (await st(A)).pos[0], m3.pos[1] - (await st(A)).pos[1])) };
-  check('menu while down', m1.state === 'paused' && m1.title === '메뉴' && /대결 · 방 \d{5} · 알파 1 \/ 브라보 0 · 목표 5킬/.test(m1.brief) && m1.lobbyHidden && m1.restartHidden && m1.quit === '방 나가기', m1);
+  check('menu while down', m1.state === 'paused' && m1.title === '메뉴' && /대결 \(개인전\) · 방 \d{5} · 알파 1 \/ 브라보 0 · 목표 5킬/.test(m1.brief) && m1.lobbyHidden && m1.restartHidden && m1.quit === '방 나가기', m1);
   check('respawn keeps menu, resume → playing', m2.state === 'paused' && m2.alive && m2.hp === 100 && m3.state === 'playing', out.menuWhileDown);
   check('respawn away from opponent', out.menuWhileDown.distFromA > 12, out.menuWhileDown.distFromA);
   await run(1);
@@ -207,7 +207,7 @@ try {
   // 10. 로비로 돌아가 모드를 협동 생존으로 바꿔 시작 → 적이 양쪽에 나온다
   await A.tap('#btnOverLobby');
   await B.waitForFunction(() => window.__yz.game.state === 'coop' && window.__yz.lob.step === 'room', null, { timeout: 8000 });
-  await A.tap('#btnCoMode');
+  await A.tap('#btnCoMode'); await A.tap('#btnCoMode'); // 개인전 → 팀전 → 협동 생존
   await B.waitForFunction(() => document.querySelector('#btnCoMode b').textContent === '협동 생존', null, { timeout: 8000 });
   out.lobby2 = { A: await lobby(A), B: await lobby(B) };
   check('back to lobby', out.lobby2.A.state === 'coop' && out.lobby2.B.state === 'coop' && out.lobby2.A.rows === 2 && out.lobby2.B.rows === 2 && out.lobby2.B.mapHidden && !out.lobby2.B.helpP, out.lobby2);
@@ -226,9 +226,9 @@ try {
   await B.waitForFunction(() => window.__yz.game.state === 'coop' && window.__yz.lob.step === 'room', null, { timeout: 8000 });
   out.hostMenu = { hm, A: (await lobby(A)).state, B: await lobby(B), enemiesB: await B.evaluate(() => window.__yz.enemies.length) };
   check('host menu → lobby', hm.state === 'paused' && hm.title === '메뉴' && !hm.lobbyHidden && out.hostMenu.A === 'coop' && out.hostMenu.B.state === 'coop' && out.hostMenu.enemiesB === 0 && /로비로 돌아왔습니다/.test(out.hostMenu.B.status), out.hostMenu);
-  await A.tap('#btnCoMode');
+  await A.tap('#btnCoMode'); await A.tap('#btnCoMode');
   await A.tap('#btnCoMap');
-  await B.waitForFunction(() => document.querySelector('#btnCoMap b').textContent === '부두' && document.querySelector('#btnCoMode b').textContent === '대결', null, { timeout: 8000 });
+  await B.waitForFunction(() => document.querySelector('#btnCoMap b').textContent === '부두' && document.querySelector('#btnCoMode b').textContent === '대결 (개인전)', null, { timeout: 8000 });
   await A.tap('#btnCoStart');
   await B.waitForFunction(() => window.__yz.game.state === 'playing' && window.__yz.coop.started && window.__yz.WORLD.id === 'dock', null, { timeout: 20000 });
   await run(1.5);

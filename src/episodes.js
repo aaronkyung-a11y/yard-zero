@@ -78,3 +78,55 @@ export const EPISODES = [
     ],
   },
 ];
+
+// 협동 임무(네트워크 전용, 1~4명). 엔진은 main.js의 "협동 임무" 부분. 방장의 폰이 진행을 계산한다.
+// 단계 type:
+//   reach  살아 있는 전원이 지점에 모인다 (fuse: 그 초 뒤에 앞 단계의 폭약이 터진다)
+//   plant  지점마다 가까이 서 있으면 진행된다. 여러 명이 서로 다른 지점을 동시에 할 수 있다 (secs: 걸리는 초, label: 진행 중 문구, minSites: 지점 수를 사람 수 + 1로 줄이되 이 값 이상)
+//   guard  앞 단계에서 설치한 폭약을 time초 동안 지킨다. 적이 폭약 곁(3.2m)에 붙어 있고 6m 안에 아무도 없는 시간이 8초 쌓이면 해제된다. 해제된 폭약은 다시 설치해야 시간이 줄어든다
+//   carry  items의 물건(kind: crate 화물 / pilot 조종사)에 차례로 다가가 집고 to까지 옮긴다. 옮기는 사람은 달릴 수 없고 느려진다. 쓰러지면 그 자리에 놓인다
+//   hold   구역에 한 명이라도 있으면 시간이 줄어든다
+// 공통: guards [[x, z, 종류]...] 시작할 때 서 있는 적, groups [종류...] 시작할 때 몰려오는 적, trickle 계속 채워지는 적, from 적이 나오는 곳, supply 끝나면 보급 선택, say 무전
+export const MISSIONS = [
+  {
+    id: 'm1', title: '폭파조', map: 'yard', env: 'dawn', level: 2, loadout: ['ar', 'shotgun', 'pistol'],
+    brief: '야드 곳곳에 폭약을 설치하고, 터질 때까지 적이 해제하지 못하게 지킨 뒤 정문으로 빠져나온다. 폭약이 서로 멀어 흩어져야 한다.',
+    stages: [
+      { type: 'plant', text: '표시된 지점에 폭약 설치', sites: [{ x: 14, z: -22 }, { x: 36, z: 16 }, { x: -30, z: 14 }], minSites: 2, supply: true,
+        guards: [[-26, 8, 'rifle'], [10, -16, 'rifle'], [18, -24, 'rusher'], [32, 10, 'rifle'], [40, 20, 'rusher']], trickle: { keep: 2, every: 4, types: ['rifle', 'rusher'] },
+        say: { start: '표시한 곳에 폭약을 설치하라. 가까이 서 있으면 설치된다. 나눠서 하면 빠르다.', end: '모두 설치됐다. 보급을 받고 폭약을 지켜라.' } },
+      { type: 'guard', text: '폭파까지 폭약 지키기', time: 40, keep: 3, every: 2.4, types: ['rifle', 'rusher', 'rifle', 'heavy', 'rusher'], boom: 30,
+        say: { start: '적이 폭약을 해제하러 온다. 폭약에 붙은 적을 놔두면 팔 초 만에 해제된다. 사십 초만 버텨라.', end: '시한장치가 돌기 시작했다. 삼십 초 뒤 폭파다. 정문으로 나와라.' } },
+      { type: 'reach', text: '폭파 전에 정문으로 이탈', at: { x: 0, z: 27, r: 6 }, trickle: { keep: 3, every: 2.5, types: ['rifle', 'rusher', 'heavy'] },
+        say: { end: '전원 이탈 확인. 수고했다.' } },
+    ],
+  },
+  {
+    id: 'm2', title: '화물 회수', map: 'dock', env: 'overcast', level: 3, loadout: ['ar', 'dmr', 'pistol'],
+    brief: '비 오는 부두에서 화물 상자 두 개를 서쪽 초소까지 옮긴다. 상자를 든 사람은 느려지니 나머지가 길을 열고 엄호해야 한다.',
+    stages: [
+      { type: 'reach', text: '중앙 크레인 아래에 집결', at: { x: 0, z: -15, r: 6 }, guards: [[-30, -12, 'rifle'], [-22, -17, 'rifle'], [-12.5, 6.3, 'rusher'], [-5, -8, 'rifle'], [9, -18, 'rifle']], supply: true,
+        say: { start: '부두다. 중앙 크레인 아래에 모여라. 화물은 동쪽 컨테이너 통로에 있다.', end: '집결 확인. 보급을 받고 화물을 찾아라.' } },
+      { type: 'carry', kind: 'crate', text: '화물 상자 2개를 서쪽 초소로', items: [{ x: 33, z: 6.3 }, { x: 6, z: 12.8 }], to: { x: -54, z: 20, r: 5 },
+        guards: [[30, 12, 'rifle'], [38, 0, 'rusher'], [44, -14, 'sniper']], trickle: { keep: 3, every: 3.2, types: ['rifle', 'rusher', 'rifle', 'heavy'] },
+        from: [{ x: 44, z: 21, r: 8 }, { x: -40, z: -12, r: 8 }, { x: 52, z: -14, r: 6 }],
+        say: { start: '상자는 한 명이 든다. 든 사람은 뛰지 못한다. 나머지는 앞뒤를 맡아라.', end: '상자 두 개 모두 확보했다. 회수정이 올 때까지 초소를 지켜라.' } },
+      { type: 'hold', text: '회수정이 올 때까지 초소 사수', at: { x: -54, z: 20, r: 11 }, time: 35, keep: 4, every: 2, types: ['rifle', 'rusher', 'rifle', 'heavy'],
+        say: { end: '회수정 도착. 화물 인계 완료.' } },
+    ],
+  },
+  {
+    id: 'm3', title: '구출', map: 'depot', env: 'night', level: 3, loadout: ['ar', 'shotgun', 'dmr', 'pistol'],
+    brief: '밤의 차량기지 정비고에 붙잡힌 조종사를 풀어 주고, 북쪽 하역장까지 부축해 데려간 뒤 차량이 올 때까지 버틴다.',
+    stages: [
+      { type: 'reach', text: '남서쪽 정비고로 이동', at: { x: -33.5, z: 23.5, r: 6 }, guards: [[-14, 25, 'rifle'], [-25, 8, 'rifle'], [-29, 12, 'rusher'], [-36, 16, 'rifle']],
+        say: { start: '조종사는 남서쪽 정비고에 갇혀 있다. 조용히 접근할 수는 없다. 뚫고 들어가라.' } },
+      { type: 'plant', text: '정비고 문 잠금 해제', sites: [{ x: -33.5, z: 23.5 }], secs: 6, label: '잠금 해제 중', groups: ['rifle', 'rusher', 'rusher'], trickle: { keep: 3, every: 3, types: ['rifle', 'rusher'] }, supply: true,
+        say: { start: '문 앞에 서 있으면 잠금이 풀린다. 그동안 나머지는 막아라.', end: '문이 열렸다. 조종사는 다리를 다쳤다. 누군가 부축해야 한다.' } },
+      { type: 'carry', kind: 'pilot', text: '조종사를 북쪽 하역장까지 부축', items: [{ x: -33.5, z: 23.5 }], to: { x: 0, z: -22, r: 5 }, trickle: { keep: 3, every: 2.8, types: ['rifle', 'rusher', 'rifle', 'heavy', 'sniper'] },
+        say: { start: '부축하는 사람은 뛰지 못한다. 북쪽 하역장까지 데려가라.', end: '하역장 도착. 차량이 가는 중이다. 버텨라.' } },
+      { type: 'hold', text: '차량이 올 때까지 하역장 사수', at: { x: 0, z: -22, r: 11 }, time: 40, keep: 5, every: 1.9, types: ['rifle', 'rusher', 'heavy', 'rifle', 'rusher'],
+        say: { end: '차량 도착. 조종사 인계 완료. 잘했다.' } },
+    ],
+  },
+];

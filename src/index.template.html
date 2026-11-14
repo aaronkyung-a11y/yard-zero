@@ -184,6 +184,9 @@ body.portrait .cards.eplist{grid-template-columns:repeat(2,minmax(0,1fr))}
 .key{background:rgba(18,21,23,.82);color:var(--ink);border:1px solid var(--line);border-radius:3px;font:700 clamp(18px,5.4vmin,24px)/1 var(--body);padding:.62em 0;cursor:pointer;touch-action:manipulation}
 .key:active{border-color:var(--amber);transform:translateY(1px)}
 .go:disabled{opacity:.4;cursor:default}
+#shareMsg{-webkit-user-select:text;user-select:text;word-break:break-all;color:var(--ink)}
+#menu .row{margin-top:14px}
+#menu .tag{margin-top:10px}
 #coCfg{margin-top:12px}
 #coCfg .ghost:disabled{border-style:dashed;cursor:default;color:var(--dim)}
 #coErr,#coStatus{max-width:46ch}
@@ -216,7 +219,7 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
   <div id="squad" class="hidden"><div class="sq hidden"><b></b><i><u></u></i></div><div class="sq hidden"><b></b><i><u></u></i></div><div class="sq hidden"><b></b><i><u></u></i></div><div id="sqOw" class="sq hidden"><b>오 상병</b><em>엄호 중</em></div></div>
   <div id="radio" class="hidden"><b id="radioN"></b><span id="radioT"></span></div>
   <div id="mk" class="hidden"><i></i><b id="mkD"></b></div>
-  <div id="tags"><span class="hidden"></span><span class="hidden"></span><span class="hidden"></span></div>
+  <div id="tags"><span class="hidden"></span><span class="hidden"></span><span class="hidden"></span><span class="hidden"></span></div>
   <div id="feed"></div>
   <div id="msg"><p id="msgT"></p><p id="msgS"></p></div>
   <div id="ch"><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i><i class="d"></i></div>
@@ -243,7 +246,7 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
     <div>
       <p class="eyebrow"><b id="verTop">v0.0</b> · YZRU 261111 0 · 22G1</p>
       <h1>YARD ZERO</h1>
-      <p class="tag">항만 일대에서 이어지는 작전. 팀원이 합류하고 흩어지는 에피소드를 차례로 진행하거나, 친구와 함께 웨이브를 막고 서로 맞붙어 보세요.</p>
+      <p class="tag">항만 일대의 작전. 혼자 에피소드를 진행하거나, 친구와 임무를 수행하고 맞붙어 보세요.</p>
       <div class="row">
         <button class="go" id="btnCamp">작전</button>
         <button class="ghost" id="btnStart">생존 모드</button>
@@ -255,6 +258,7 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
         <button class="ghost" id="btnFull">전체 화면</button>
         <button class="ghost" id="btnRot">가로로 돌려서 하기 <b>끔</b></button>
         <button class="ghost hidden" id="btnInstall">앱으로 설치</button>
+        <button class="ghost" id="btnShare">친구에게 공유</button>
         <button class="ghost hidden" id="btnUpdate">새 버전 적용</button>
       </div>
       <div class="row">
@@ -276,7 +280,7 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
         <dt>팀원</dt><dd>하늘색 이름표. 알아서 따라오며 교전</dd>
         <dt>수류탄 버튼</dt><dd>던지고 2.6초 뒤 폭발</dd>
         <dt>체력</dt><dd>저절로 차지 않음. 의무 보급품과 보급 선택으로 회복</dd>
-        <dt>오른쪽 위 ☰</dt><dd>게임 중 메뉴. 감도·소리·나가기</dd>
+        <dt>메뉴 버튼</dt><dd>오른쪽 위. 게임 중 감도·소리·나가기</dd>
       </dl>
       <dl class="kb">
         <dt>W A S D</dt><dd>이동. Shift 질주, C 앉기, Space 점프</dd>
@@ -285,6 +289,7 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
         <dt>Esc</dt><dd>게임 중 메뉴</dd>
       </dl>
       <p class="foot hidden" id="iosHint">Safari 공유 버튼에서 "홈 화면에 추가"를 누르면 앱처럼 설치됩니다</p>
+      <p class="foot hidden" id="shareMsg"></p>
       <p class="foot" id="verTxt">v0.1</p>
     </div>
   </div>
@@ -344,7 +349,7 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
       <h2>멀티플레이</h2>
       <p id="coErr"></p>
       <div id="coChoose">
-        <p class="tag">한 명이 방을 만들고, 나머지는 방 코드로 들어옵니다. 방장이 협동 생존과 대결 중에서 고릅니다.</p>
+        <p class="tag">한 명이 방을 만들고, 나머지는 방 코드로 들어옵니다. 방장이 협동 생존, 협동 임무, 대결(개인전·팀전) 중에서 고릅니다.</p>
         <div class="row"><button class="go" id="btnCoHost">방 만들기</button><button class="ghost" id="btnCoJoin">코드로 참가</button><button class="ghost" id="btnCoBack">뒤로</button></div>
       </div>
       <div id="coPad" class="hidden">
@@ -356,7 +361,7 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
         <p class="best" style="margin-top:14px">방 코드</p>
         <p class="cocode" id="coCode">·····</p>
         <p class="best" id="coStatus"></p>
-        <div class="row" id="coCfg"><button class="ghost" id="btnCoMode">모드 <b>협동 생존</b></button><button class="ghost" id="btnCoMap">맵 <b>컨테이너 야드</b></button><button class="ghost" id="btnCoKt">목표 <b>10킬</b></button></div>
+        <div class="row" id="coCfg"><button class="ghost" id="btnCoMode">모드 <b>협동 생존</b></button><button class="ghost hidden" id="btnCoMis">임무 <b>1</b></button><button class="ghost" id="btnCoMap">맵 <b>컨테이너 야드</b></button><button class="ghost" id="btnCoKt">목표 <b>10킬</b></button><button class="ghost hidden" id="btnCoTeam">내 팀 <b>청팀</b></button></div>
         <div class="row"><button class="go" id="btnCoStart">시작</button><button class="ghost" id="btnCoShare">초대 링크 공유</button><button class="ghost" id="btnCoLeave">방 나가기</button></div>
       </div>
     </div>
@@ -381,6 +386,18 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
           <dt>쓰러지면</dt><dd>4초 뒤 상대와 떨어진 자리에서 복귀. 2초 동안 보호</dd>
           <dt>보급품</dt><dd>맵 곳곳에 주기적으로 놓임. 체력은 저절로 차지 않음</dd>
           <dt>위치 표식</dt><dd>15초 동안 교전이 없으면 가장 가까운 상대의 위치가 표시됨</dd>
+        </dl>
+        <dl id="coHelpT" class="hidden">
+          <dt>팀전</dt><dd>청팀 대 홍팀. 팀의 킬을 더해 먼저 목표에 닿으면 승리</dd>
+          <dt>팀 나누기</dt><dd>"내 팀" 버튼으로 각자 바꿈. 같은 팀끼리는 피해 없음</dd>
+          <dt>팀원</dt><dd>파란 군복과 이름표. 상대는 이름표 없음</dd>
+          <dt>쓰러지면</dt><dd>4초 뒤 상대 팀과 떨어진 자리에서 복귀. 2초 동안 보호</dd>
+        </dl>
+        <dl id="coHelpM" class="hidden">
+          <dt>임무</dt><dd id="coHelpMB"></dd>
+          <dt>진행</dt><dd>방을 만든 폰이 계산. 목표는 화면 위와 표식으로 표시</dd>
+          <dt>쓰러지면</dt><dd>10초 뒤 팀원 근처에서 복귀. 전원이 함께 쓰러지면 실패</dd>
+          <dt>적의 수</dt><dd>사람이 늘수록 많아짐</dd>
         </dl>
       </div>
     </div>

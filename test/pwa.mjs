@@ -31,6 +31,7 @@ await page.evaluate(() => { const y = window.__yz; y.opt.quality = 'low'; y.appl
 await page.tap('#btnStart');
 await page.waitForTimeout(1200);
 out.offline = await page.evaluate(() => ({ state: window.__yz.game.state, clips: Object.keys(window.__yz.MOCAP.clips).length, samples: window.__yz.SFX.sampleState, controlled: !!navigator.serviceWorker.controller }));
+out.shareUrl = await page.evaluate(() => window.__yz.shareUrl()).catch((e) => 'ERR ' + e.message); // 설치형으로 열렸을 때는 지금 주소를 공유한다
 console.log(JSON.stringify(out));
 console.log(errors.length ? 'ERRORS:\n' + errors.join('\n') : 'no page errors');
 await browser.close();

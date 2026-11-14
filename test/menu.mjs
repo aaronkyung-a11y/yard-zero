@@ -63,6 +63,24 @@ try {
     return { full: run(100), mid: run(60), low: run(30) };
   });
   check('med drops scale with need', out.drops.low[0] > out.drops.mid[0] && out.drops.mid[0] > out.drops.full[0], out.drops);
+  // 8. 메인 메뉴의 "친구에게 공유": 공유 창으로 설치 주소를 보낸다. 공유 창이 없으면 주소를 복사하고 화면에 적는다
+  out.share = await ev(async () => {
+    const y = window.__yz, calls = [];
+    y.quitToMenu();
+    const vis = !document.getElementById('btnShare').classList.contains('hidden') && !document.getElementById('menu').classList.contains('hidden');
+    navigator.share = (d) => { calls.push(d); return Promise.resolve(); };
+    document.getElementById('btnShare').click();
+    await new Promise((r) => setTimeout(r, 60));
+    const via = calls[0] || {};
+    navigator.share = undefined;
+    let copied = '';
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: (t) => { copied = t; return Promise.resolve(); } }, configurable: true });
+    document.getElementById('btnShare').click();
+    await new Promise((r) => setTimeout(r, 60));
+    return { vis, url: via.url, title: via.title, text: via.text, copied, label: document.getElementById('btnShare').textContent, msg: document.getElementById('shareMsg').textContent, msgShown: !document.getElementById('shareMsg').classList.contains('hidden') };
+  });
+  check('share button', out.share.vis && out.share.url === 'https://aaronkyung-a11y.github.io/yard-zero/' && out.share.title === 'YARD ZERO' && /앱으로 설치/.test(out.share.text) && out.share.copied === out.share.url && out.share.label === '주소를 복사했습니다' && out.share.msgShown && /github\.io\/yard-zero/.test(out.share.msg), out.share);
+  await page.screenshot({ path: 'test/menu-share.png' });
 } catch (e) { fail.push('exception ' + (e && e.message ? e.message.split('\n')[0] : e)); }
 console.log(JSON.stringify(out));
 console.log(fail.length ? 'FAIL\n' + fail.join('\n') : 'PASS');
