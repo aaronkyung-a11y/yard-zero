@@ -61,6 +61,7 @@ body.rot{--sl:env(safe-area-inset-top,0px);--st:env(safe-area-inset-right,0px);-
 #ch .t{top:calc(-9px - var(--g))} #ch .b{top:var(--g)} #ch .l{left:calc(-9px - var(--g))} #ch .r{left:var(--g)}
 #ch .d{width:2px;height:2px;left:-1px;top:-1px}
 #ch.lock i{background:var(--amber)}
+#ch.armor i{background:#8fc7ff}
 #scope{position:absolute;inset:0;background:radial-gradient(circle at 50% 50%,transparent 0,transparent 33vmin,rgba(0,0,0,.97) 33.6vmin)}
 #scope i{position:absolute;background:#0c0c0c}
 #scope .h{left:calc(50% - 33vmin);right:calc(50% - 33vmin);top:50%;height:1.5px;margin-top:-.75px}
@@ -148,6 +149,23 @@ h2{margin:0;font:400 clamp(32px,11vmin,72px)/.9 var(--display);letter-spacing:.0
 .card .sd{font:500 clamp(12px,3.2vmin,15px)/1.3 var(--body);color:var(--dim)}
 body.portrait .cards{grid-template-columns:1fr}
 #obj{position:absolute;left:50%;top:calc(38px + var(--st));transform:translateX(-50%);display:flex;gap:10px;align-items:baseline;white-space:nowrap;background:rgba(9,11,12,.5);padding:5px 10px;border-left:2px solid var(--amber)}
+/* 지휘관(보스) 체력 막대: 화면 위 가운데. 목표 문구가 있으면(.low) 그 아래. 방탄이 풀린 동안(.open)은 색이 바뀐다 */
+#boss{position:absolute;left:50%;top:calc(38px + var(--st));transform:translateX(-50%);width:min(46vw,360px)}
+#boss.low{top:calc(70px + var(--st))}
+#boss .bh{display:flex;justify-content:space-between;align-items:baseline;gap:10px;white-space:nowrap}
+#boss b{font:700 clamp(11px,3.1vmin,15px)/1 var(--body);letter-spacing:.06em;color:#ff8266}
+#boss span{font:700 clamp(11px,3.1vmin,15px)/1 var(--body);color:#8fc7ff}
+#boss.open span{color:var(--amber)}
+#boss i{display:block;position:relative;height:clamp(6px,1.8vmin,9px);margin-top:4px;background:rgba(0,0,0,.55);outline:1px solid var(--line)}
+#boss u{position:absolute;inset:0;background:#e2492c;transform-origin:left center}
+#boss.open u{background:var(--amber)}
+#boss em{position:absolute;top:-1px;bottom:-1px;width:1px;background:rgba(255,255,255,.6)}
+#boss em:nth-of-type(1){left:33%}
+#boss em:nth-of-type(2){left:66%}
+#boss s{display:block;height:3px;margin-top:3px;background:var(--amber);transform-origin:left center;transform:scaleX(0)}
+body.bossOn #msg{top:29%}
+#shellWarn{position:absolute;left:50%;top:62%;transform:translateX(-50%);white-space:nowrap;font:700 clamp(13px,3.8vmin,18px)/1 var(--body);letter-spacing:.08em;color:#fff;background:rgba(214,40,16,.86);padding:6px 12px;animation:shw .45s steps(2,jump-none) infinite}
+@keyframes shw{0%{opacity:1}100%{opacity:.55}}
 #obj b{font:700 clamp(12px,3.4vmin,16px)/1 var(--body);letter-spacing:.04em}
 #obj span{font:700 clamp(12px,3.4vmin,16px)/1 var(--body);color:var(--amber);font-variant-numeric:tabular-nums}
 #squad{position:absolute;left:calc(14px + var(--sl));top:calc(40px + var(--st));display:flex;flex-direction:column;gap:5px}
@@ -168,12 +186,21 @@ body.portrait .cards{grid-template-columns:1fr}
 #tags span::after{content:'▾';display:block;margin-top:1px}
 #tags span.down{color:var(--amber)}
 body.portrait #obj{left:calc(14px + var(--sl));top:calc(66px + var(--st));transform:none}
+/* 세로 화면: 웨이브 줄 아래에 막대 한 줄을 끼워 넣고, 그 아래 요소들을 한 줄씩 내린다 */
+body.portrait #boss,body.portrait #boss.low{left:calc(14px + var(--sl));right:calc(14px + var(--sr));top:calc(66px + var(--st));transform:none;width:auto}
+body.portrait.bossOn #obj{top:calc(96px + var(--st))}
+body.portrait.bossOn #feed{top:calc(94px + var(--st))}
+body.portrait.bossOn #squad{top:calc(126px + var(--st))}
+body.portrait.bossOn #radio{top:calc(198px + var(--st))}
+body.portrait.bossOn #msg{top:25%}
 body.portrait #squad{top:calc(96px + var(--st))}
 body.portrait #radio{bottom:auto;top:calc(168px + var(--st));max-width:86%}
 .cards.eplist{grid-template-columns:repeat(4,minmax(0,1fr))}
 body.portrait .cards.eplist{grid-template-columns:repeat(2,minmax(0,1fr))}
 .card.ep{min-height:110px}
 .card.ep .sq2{font:500 clamp(11px,2.9vmin,13px)/1.3 var(--body);color:#8fd6ff}
+.card.bossEp{grid-column:1/-1;min-height:0;flex-direction:row;flex-wrap:wrap;align-items:baseline;gap:6px 16px;padding:11px 14px;border-color:rgba(226,73,44,.55)}
+.card.bossEp .sl{color:#ff8266}
 .card.locked{opacity:.38;cursor:default}
 #eps,#epdone,#coop{background:linear-gradient(180deg,rgba(9,11,12,.88) 0%,rgba(9,11,12,.76) 100%)}
 .cocode{margin:6px 0 0;font:700 clamp(40px,13vmin,84px)/1 var(--body);letter-spacing:.14em;color:var(--amber);font-variant-numeric:tabular-nums}
@@ -201,7 +228,7 @@ body.portrait #bCrouch{right:calc(31*var(--u) + var(--sr));bottom:calc(40*var(--
 body.portrait #bGren{right:calc(8*var(--u) + var(--sr));bottom:calc(55*var(--u) + var(--sb))}
 body.portrait .wrap{grid-template-columns:1fr;align-items:start}
 body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgba(9,11,12,.72) 60%,rgba(9,11,12,.45) 100%)}
-@media (prefers-reduced-motion:reduce){#feed span{animation-duration:.01s}#msg{transition:none}}
+@media (prefers-reduced-motion:reduce){#feed span{animation-duration:.01s}#msg{transition:none}#shellWarn{animation:none}}
 </style>
 </head>
 <body class="mouse">
@@ -216,6 +243,8 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
   <div id="topC"><span id="waveTxt">WAVE 1</span><span id="enemyTxt">적 4</span></div>
   <div id="topR"><b id="scoreTxt">0</b><span class="lbl">점수</span><span class="lbl" id="hudVer" style="text-transform:none;opacity:.7;white-space:nowrap;letter-spacing:.06em"></span></div>
   <div id="obj" class="hidden"><b id="objT"></b><span id="objS"></span></div>
+  <div id="boss" class="hidden"><div class="bh"><b id="bossN"></b><span id="bossS"></span></div><i><u id="bossFill"></u><em></em><em></em></i><s id="bossT"></s></div>
+  <div id="shellWarn" class="hidden">포격 · 붉은 원 밖으로</div>
   <div id="squad" class="hidden"><div class="sq hidden"><b></b><i><u></u></i></div><div class="sq hidden"><b></b><i><u></u></i></div><div class="sq hidden"><b></b><i><u></u></i></div><div id="sqOw" class="sq hidden"><b>오 상병</b><em>엄호 중</em></div></div>
   <div id="radio" class="hidden"><b id="radioN"></b><span id="radioT"></span></div>
   <div id="mk" class="hidden"><i></i><b id="mkD"></b></div>
@@ -379,6 +408,7 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
           <dt>적의 수</dt><dd>사람이 늘수록 많아짐</dd>
           <dt>쓰러지면</dt><dd>10초 뒤 출발 지점에서 복귀. 전원이 함께 쓰러지면 끝</dd>
           <dt>보급</dt><dd>웨이브 사이에 각자 하나씩. 게임은 멈추지 않음</dd>
+          <dt>지휘관</dt><dd>5웨이브마다 등장. 사람이 늘수록 체력이 많아짐</dd>
         </dl>
         <dl id="coHelpP" class="hidden">
           <dt>대결</dt><dd>모두가 서로의 적(개인전). 먼저 목표 킬에 닿으면 승리</dd>

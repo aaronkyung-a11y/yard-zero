@@ -79,7 +79,7 @@ try {
   await A.tap('#btnCoMis');
   await B.waitForFunction(() => /^2 · 화물 회수/.test(document.querySelector('#btnCoMis b').textContent), null, { timeout: 8000 });
   out.lobbyPick = await lobby(B);
-  await A.tap('#btnCoMis'); await A.tap('#btnCoMis'); // 3 → 1
+  await A.tap('#btnCoMis'); await A.tap('#btnCoMis'); await A.tap('#btnCoMis'); // 3 → 4(v0.10 지휘부 타격) → 1
   await B.waitForFunction(() => /^1 · 폭파조/.test(document.querySelector('#btnCoMis b').textContent), null, { timeout: 8000 });
   out.lobby = { A: await lobby(A), B: await lobby(B) };
   check('mission lobby', out.lobby.B.mode === '협동 임무' && !out.lobby.B.misHidden && out.lobby.B.mapHidden && out.lobby.B.helpM && /폭약/.test(out.lobby.B.brief) && /화물 상자/.test(out.lobbyPick.brief), out.lobby);
@@ -271,11 +271,11 @@ try {
   await A.evaluate(() => { window.__yz.camp.st.holdT = 1.5; window.__yz.camp.st.respawn = 99; });
   await run(8, async () => (await A.evaluate(() => window.__yz.game.state)) === 'epdone' && (await B.evaluate(() => window.__yz.game.state)) === 'epdone');
   out.m3done = { A: await done(A), B: await done(B) };
-  check('m3 complete (last)', out.m3done.A.title === '협동 임무 3 · 구출' && out.m3done.A.nextHidden && /모든 임무를 마쳤습니다/.test(out.m3done.A.note), out.m3done);
+  check('m3 complete (next: m4)', out.m3done.A.title === '협동 임무 3 · 구출' && !out.m3done.A.nextHidden && /다음: 임무 4 · 지휘부 타격/.test(out.m3done.A.note), out.m3done); // v0.10: 임무 4가 생겨 마지막이 아니다(임무 4의 완료는 bosscoop.mjs에서 본다)
   // 로비로 → 임무 1을 다시 시작 → 전원 쓰러짐 = 임무 실패
   await A.tap('#btnEpList');
   await B.waitForFunction(() => window.__yz.game.state === 'coop' && window.__yz.lob.step === 'room', null, { timeout: 8000 });
-  await A.tap('#btnCoMis'); // 3 → 1
+  await A.tap('#btnCoMis'); await A.tap('#btnCoMis'); // 3 → 4 → 1
   await B.waitForFunction(() => /^1 · /.test(document.querySelector('#btnCoMis b').textContent), null, { timeout: 8000 });
   await A.tap('#btnCoStart');
   await B.waitForFunction(() => window.__yz.game.state === 'playing' && window.__yz.coop.started && window.__yz.WORLD.id === 'yard', null, { timeout: 25000 });

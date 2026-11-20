@@ -64,8 +64,9 @@ export function loadMocap(done) {
       try {
         const map = tex(diffUrl, true), nrm = tex(nrmUrl, false);
         const mk = (c) => new THREE.MeshStandardMaterial({ map, normalMap: nrm, normalScale: new THREE.Vector2(1, -1), color: c, roughness: 0.86, metalness: 0 });
-        MOCAP.mats = { rifle: mk(0xffffff), rifle2: mk(0xe0dccb), rusher: mk(0xc48f74), heavy: mk(0x6f7a66), sniper: mk(0x8b98aa), ally: mk(0x74aee6), ally2: mk(0x66c2bd) };
+        MOCAP.mats = { rifle: mk(0xffffff), rifle2: mk(0xe0dccb), rusher: mk(0xc48f74), heavy: mk(0x6f7a66), sniper: mk(0x8b98aa), ally: mk(0x74aee6), ally2: mk(0x66c2bd), boss: mk(0x7c8590), boss2: mk(0xc65a3c) };
         MOCAP.visor = new THREE.MeshStandardMaterial({ color: 0x0a0d10, roughness: 0.12, metalness: 0.7 });
+        MOCAP.visorBoss = new THREE.MeshStandardMaterial({ color: 0x2a0a06, roughness: 0.2, metalness: 0.5, emissive: 0xff2a12, emissiveIntensity: 2.2 }); // 지휘관(보스): 붉게 빛나는 고글
         MOCAP.scene = gltf.scene;
         MOCAP.clips = {};
         for (const c of gltf.animations) MOCAP.clips[c.name] = c;
@@ -251,7 +252,7 @@ export class MocapBody {
     const mat = MOCAP.mats[matKey] || MOCAP.mats.rifle;
     obj.traverse((o) => {
       if (o.isSkinnedMesh) {
-        o.material = /visor/i.test(o.name) ? MOCAP.visor : mat;
+        o.material = /visor/i.test(o.name) ? (/^boss/.test(matKey) ? MOCAP.visorBoss : MOCAP.visor) : mat;
         o.castShadow = true;
         o.frustumCulled = false;
       }

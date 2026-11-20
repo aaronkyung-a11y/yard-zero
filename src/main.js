@@ -12,7 +12,7 @@ import { buildViewmodel } from './viewmodel.js';
 import { EPISODES, SQUAD, MISSIONS } from './episodes.js';
 import { NET, host as netHost, join as netJoin, sendEv, sendSt, close as netClose } from './net.js';
 
-const VERSION = 'v0.9';
+const VERSION = 'v0.10';
 const UP = new THREE.Vector3(0, 1, 0);
 const _f = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _d = new THREE.Vector3(), _v = new THREE.Vector3(), _w = new THREE.Vector3(), _m = new THREE.Vector3(), _mz = new THREE.Vector3();
 const ZAXIS = new THREE.Vector3(0, 0, 1);
@@ -306,7 +306,7 @@ const assist = { t: 0 };
 // ───────────────────────── HUD
 const el = {};
 for (const id of ['coop', 'hudVer', 'obj', 'objT', 'objS', 'squad', 'sqOw', 'radio', 'radioN', 'radioT', 'mk', 'mkD', 'tags', 'eps', 'epdone', 'rl', 'rlFill', 'hint', 'supply', 'supplySub', 'sup0', 'sup1', 'sup2', 'hud', 'touch', 'bPause', 'menu', 'pause', 'over', 'hpFill', 'hpNum', 'waveTxt', 'enemyTxt', 'scoreTxt', 'feed', 'msg', 'msgT', 'msgS', 'ch', 'hm', 'dmgs', 'rl', 'rlFill', 'hint',
-  'joy', 'knob', 'bAds', 'bCrouch', 'ammoN', 'ammoR', 'wName', 'hurt', 'bestTxt', 'sensTxt', 'sensTxt0', 'scope', 'grenN']) el[id] = $(id);
+  'joy', 'knob', 'bAds', 'bCrouch', 'ammoN', 'ammoR', 'wName', 'hurt', 'bestTxt', 'sensTxt', 'sensTxt0', 'scope', 'grenN', 'boss', 'bossN', 'bossS', 'bossFill', 'bossT', 'shellWarn']) el[id] = $(id);
 const cache = {};
 const hudS = { hm: 0, hurt: 0, msg: 0 };
 const dmgInd = [0, 1, 2, 3].map((i) => ({ x: 0, z: 0, t: 0, el: el.dmgs.children[i] }));
@@ -405,17 +405,17 @@ function bloodFx(x, y, z, d) {
 // ───────────────────────── 사격
 function rayEnemy(e, o, d, maxT) {
   let best = -1, part = 0;
-  const dr = e.crouch * 0.37, top = 1.58 - dr, mid = 0.98 - dr * 0.75, ex = o.x - e.pos.x, ez = o.z - e.pos.z;
+  const k = e.hs || 1, k2 = k * k, dr = e.crouch * 0.37 * k, top = 1.58 * k - dr, mid = 0.98 * k - dr * 0.75, ex = o.x - e.pos.x, ez = o.z - e.pos.z; // k: 몸집 배율(지휘관)
   { // 머리(구)
-    const ey = o.y - (1.72 - dr), b = ex * d.x + ey * d.y + ez * d.z, c = ex * ex + ey * ey + ez * ez - 0.0256, disc = b * b - c;
+    const ey = o.y - (1.72 * k - dr), b = ex * d.x + ey * d.y + ez * d.z, c = ex * ex + ey * ey + ez * ez - 0.0256 * k2, disc = b * b - c;
     if (disc >= 0) { const t = -b - Math.sqrt(disc); if (t > 0 && t < maxT) { best = t; part = 2; maxT = t; } }
   }
   const a = d.x * d.x + d.z * d.z;
   if (a > 1e-8) {
     const b = ex * d.x + ez * d.z, base = ex * ex + ez * ez;
-    let disc = b * b - a * (base - 0.0729); // 몸통 r=0.27
+    let disc = b * b - a * (base - 0.0729 * k2); // 몸통 r=0.27
     if (disc >= 0) { const t = (-b - Math.sqrt(disc)) / a, y = o.y + d.y * t; if (t > 0 && t < maxT && y >= mid && y <= top) { best = t; part = 1; maxT = t; } }
-    disc = b * b - a * (base - 0.04); // 다리 r=0.2
+    disc = b * b - a * (base - 0.04 * k2); // 다리 r=0.2
     if (disc >= 0) { const t = (-b - Math.sqrt(disc)) / a, y = o.y + d.y * t; if (t > 0 && t < maxT && y >= 0 && y < mid) { best = t; part = 0; } }
   }
   rayEnemy.part = part;
@@ -469,7 +469,7 @@ function shoot(w) {
   _r.crossVectors(_f, UP).normalize();
   _u.crossVectors(_r, _f);
   g.flash.getWorldPosition(_mz);
-  let anyHit = false, killed = false, headKill = false, headHit = false;
+  let anyHit = false, killed = false, headKill = false, headHit = false, plate = null;
   for (let i = 0; i < n; i++) {
     const ang = Math.random() * TAU, rho = Math.tan(spread) * Math.sqrt(Math.random());
     _d.copy(_f).addScaledVector(_r, Math.cos(ang) * rho).addScaledVector(_u, Math.sin(ang) * rho).normalize();
@@ -495,7 +495,10 @@ function shoot(w) {
     const hx = o.x + _d.x * tEnd, hy = o.y + _d.y * tEnd, hz = o.z + _d.z * tEnd;
     if (target) {
       const fall = clamp(1 - (tEnd - w.fall[0]) / (w.fall[1] - w.fall[0]), w.fall[2], 1);
-      if (i < 3) bloodFx(hx, hy, hz, _d);
+      if (target.boss && bossArmor(target, _d, null) < 1) { // 지휘관의 방탄판: 피 대신 불꽃이 튄다
+        plate = target;
+        if (i < 3) for (let q = 0; q < 5; q++) sparks.emit(hx, hy, hz, -_d.x * rr(2, 6) + rr(-3, 3), rr(-1, 4), -_d.z * rr(2, 6) + rr(-3, 3), rr(0.12, 0.3), rr(0.02, 0.035), 1, 0.8, 0.4, 1, 9.8, 0.5);
+      } else if (i < 3) bloodFx(hx, hy, hz, _d);
       anyHit = true;
       if (part === 2) headHit = true;
       if (target instanceof RemotePlayer) { // 대결: 산탄처럼 여러 발이 맞으면 모아서 한 번에 알린다
@@ -513,7 +516,10 @@ function shoot(w) {
     game.hits++;
     hudS.hm = killed ? 0.3 : 0.16;
     el.hm.classList.toggle('kill', killed);
-    SFX.play(headHit ? 'head' : 'hit', killed ? 0.6 : 0.45, rr(0.93, 1.07));
+    if (plate && !killed) {
+      SFX.play('impactM', 0.5, rr(1.25, 1.5));
+      if (plate.T.armor < 0.3 && game.time - (shoot.tipT || -99) > 7) { shoot.tipT = game.time; feed('방탄 · 장전할 때와 등 뒤를 노려라'); }
+    } else SFX.play(headHit ? 'head' : 'hit', killed ? 0.6 : 0.45, rr(0.93, 1.07));
   }
   // 총구 연기·화염·조명
   dust.emit(_mz.x + _f.x * 0.1, _mz.y, _mz.z + _f.z * 0.1, _f.x * 1.5 + rr(-0.2, 0.2), rr(0.2, 0.6), _f.z * 1.5 + rr(-0.2, 0.2), rr(0.35, 0.6), w.pellets ? 0.12 : 0.07, 0.75, 0.74, 0.72, 0.16, -0.3, 2.5, 0.5);
@@ -639,7 +645,7 @@ function updateWeapon(dt) {
   const w = W[vm.cur];
   vm.cool -= dt;
   vm.fireBuf -= dt;
-  const auto0 = opt.autoFire && aa.held > (isPvp() ? 0.15 : 0.07) && aa.d < (w.autoRange || w.range * 0.7);
+  const auto0 = opt.autoFire && aa.held > (isPvp() ? 0.15 : 0.07) && aa.d < (w.autoRange || w.range * 0.7) && aa.arm > 0.3; // 지휘관의 방탄판 정면(피해 30% 이하)에는 자동으로 쏘지 않는다. 사격 버튼으로는 쏠 수 있다
   // 한 발씩 장전하는 중에 쏘려고 하면 장전을 멈춘다
   if (w.shell && vm.reloadT > 0 && w.ammo > 0 && (vm.fireBuf > 0 || auto0)) { vm.reloadT = 0; vm.cool = Math.max(vm.cool, 0.25); if (vm.fireBuf > 0) vm.fireBuf = 0.4; } // 누른 한 발은 장전을 멈춘 직후에 나간다
   const busy = vm.reloadT > 0 || vm.switchT > 0 || vm.throwT > 0.15;
@@ -850,8 +856,8 @@ function updatePlayer(dt) {
 }
 
 // ───────────────────────── 조준 보조·자동 사격용 표적 탐색
-const aa = { e: null, ang: 9, d: 0, vis: false, y: 1.3, held: 0 };
-const chestY = (e) => (e.pid !== undefined ? e.pos.y : 0) + 1.3 - e.crouch * 0.3; // 다른 플레이어는 2층·계단에 있을 수 있다
+const aa = { e: null, ang: 9, d: 0, vis: false, y: 1.3, held: 0, arm: 1 }; // arm: 겨눈 지휘관의 방탄 배율(1이면 그대로 들어간다)
+const chestY = (e) => (e.pid !== undefined ? e.pos.y : 0) + (1.3 - e.crouch * 0.3) * (e.hs || 1); // 다른 플레이어는 2층·계단에 있을 수 있다
 function scanTarget(dt) {
   camera.getWorldDirection(_f);
   const c = camera.position;
@@ -869,20 +875,24 @@ function scanTarget(dt) {
   aa.d = bd;
   aa.vis = false;
   aa.ang = 9;
+  aa.arm = 1;
   if (best) {
+    if (best.boss) aa.arm = bossArmor(best, _w.set(best.pos.x - c.x, 0, best.pos.z - c.z), null);
     aa.y = chestY(best);
     aa.vis = losClear(c.x, c.y, c.z, best.pos.x, aa.y, best.pos.z);
     if (!aa.vis) {
-      aa.y = (best.pid !== undefined ? best.pos.y : 0) + 1.66 - best.crouch * 0.37; // 몸통이 가려졌으면 머리
+      aa.y = (best.pid !== undefined ? best.pos.y : 0) + (1.66 - best.crouch * 0.37) * (best.hs || 1); // 몸통이 가려졌으면 머리
       aa.vis = losClear(c.x, c.y, c.z, best.pos.x, aa.y, best.pos.z);
     }
     _v.set(best.pos.x - c.x, aa.y - c.y, best.pos.z - c.z).normalize();
     aa.ang = Math.acos(Math.min(1, _v.dot(_f)));
   }
-  const on = aa.vis && aa.ang < Math.atan(0.3 / Math.max(aa.d, 1)) + 0.012;
+  const on = aa.vis && aa.ang < Math.atan((0.3 * (best ? best.hs || 1 : 1)) / Math.max(aa.d, 1)) + 0.012;
   aa.held = on ? aa.held + dt : 0;
   const lock = on && (opt.autoFire || input.lastTouch);
   if (cache.lock !== lock) { cache.lock = lock; el.ch.classList.toggle('lock', lock); }
+  const armed = on && aa.arm < 1; // 방탄판을 겨누고 있으면 조준선 색이 바뀐다
+  if (cache.armed !== armed) { cache.armed = armed; el.ch.classList.toggle('armor', armed); }
 }
 
 function handleLook(dt) {
@@ -951,6 +961,16 @@ const TYPES = {
   rusher: { key: 'rusher', label: '돌격병 사살', score: 120, hp: 70, mat: 'rusher', puppet: 1, scale: 0.97, speed: 1.16, pref: [4, 9], burst: [4, 7], rof: 0.08, dmg: [4, 6.5], sig: 1.45, react: 0.7, headMul: 4, flinch: 1, kneel: 0, moveFire: 3.4 },
   heavy: { key: 'heavy', label: '중장병 사살', score: 250, hp: 260, mat: 'heavy', puppet: 0, scale: 1.1, speed: 0.6, pref: [12, 22], burst: [9, 15], rof: 0.085, dmg: [5, 7.5], sig: 1.3, react: 1.2, headMul: 2, flinch: 0.3, kneel: 0.15, moveFire: 1.5 },
   sniper: { key: 'sniper', label: '저격수 사살', score: 200, hp: 80, mat: 'sniper', puppet: 1, scale: 1, speed: 0.92, pref: [32, 48], burst: [1, 1], rof: 1, dmg: [42, 48], sig: 1, react: 1, headMul: 4, flinch: 1, kneel: 1, moveFire: 0, sniper: true },
+  // v0.10 지휘관(보스). 엔진은 아래 "지휘관(보스)" 부분.
+  // armor: 정면에서 받는 피해 배율(옆은 그 중간, 등 뒤는 1), weak: 방탄이 풀린 동안(장전·포격 지시·비틀거림)의 피해 배율, mag·reloadT: 탄창과 장전 시간, open: 장전할 때 엄폐하지 않고 그 자리에 앉는다,
+  // flush: 숨은 표적에게만 유탄을 쏜다, call: 포격을 지시하느라 멈춰 서는 시간(초), shellEvery: 단계(체력 100~66 / 66~33 / 33~0%)별 포격 간격(초, 0이면 없음),
+  // shell: [원의 반경(m), 중심 피해, 원이 뜬 뒤 떨어지기까지(초)], adds: 체력 66% · 33%에서 부르는 증원, rage: 마지막 단계의 [이동 배율, 장전 시간, 연사 간격], turn: 돌아서는 빠르기(rad/s, 보통 적은 6.5), far: 표적이 28m보다 멀 때의 이동 배율(느린 철갑이 오래 걸어오지 않게),
+  // suppress: 표적이 숨어도 이 시간(초) 동안은 마지막으로 본 자리에 계속 쏜다(제압 사격). 숨어 있으면 탄창이 비고, 장전하는 틈이 온다
+  // sweep: 탄은 몸이 향한 쪽에서 이 각(rad) 안으로만 나간다(돌아서는 동안에는 탄 줄기가 뒤따라온다), windup: 장전을 마친 뒤 다시 쏘기까지의 뜸(초)
+  jugg: { key: 'jugg', boss: true, name: '지휘관 철갑', short: '철갑', title: '중장갑 지휘관', tip: '정면은 방탄 · 장전할 때와 등 뒤를 노려라', label: '지휘관 철갑 제거', score: 2000, hp: 3600, mat: 'boss', puppet: 0, scale: 1.3, speed: 0.5, pref: [7, 15], burst: [40, 40], mag: 40, reloadT: 3.6, rof: 0.07, dmg: [4, 6], sig: 1.9, react: 0.9, headMul: 1.5, flinch: 0, kneel: 0, moveFire: 1.5,
+    armor: 0.2, turn: 2.0, far: 1.9, suppress: 3.4, sweep: 0.14, windup: 0.9, open: true, flush: true, call: 0, shellEvery: [0, 8, 5], shell: [3.4, 60, 1.6], adds: [['rusher', 'rifle'], ['rusher', 'rusher', 'rifle']], rage: [1.35, 3.0, 0.06], weak: 1.25 },
+  bomb: { key: 'bomb', boss: true, name: '지휘관 화약고', short: '화약고', title: '포격 지휘관', tip: '붉은 원에서 벗어나라 · 무전을 칠 때가 틈이다', label: '지휘관 화약고 제거', score: 2000, hp: 2800, mat: 'boss2', puppet: 0, scale: 1.18, speed: 0.95, pref: [16, 28], burst: [4, 6], mag: 30, reloadT: 2.2, rof: 0.085, dmg: [5, 7.5], sig: 1.05, react: 0.9, headMul: 1.5, flinch: 0, kneel: 0.3, moveFire: 1.4,
+    armor: 0.55, turn: 3.5, windup: 0.4, open: false, flush: false, call: 1.3, shellEvery: [7.5, 6, 5.2], shell: [4.2, 75, 1.5], adds: [['rifle', 'rusher'], ['rifle', 'rusher', 'rusher']], rage: [1.15, 1.8, 0.08], weak: 1.25 },
 };
 const laserGeo = new THREE.BoxGeometry(0.016, 0.016, 1);
 laserGeo.translate(0, 0, 0.5);
@@ -1078,13 +1098,15 @@ class Enemy {
     this.pos = new THREE.Vector3(x, 0, z);
     this.aimYaw = this.bodyYaw = Math.atan2(player.pos.x - x, player.pos.z - z);
     this.back = false; this.vx = 0; this.vz = 0; this.crouch = 0; this.kneel = Math.random() < T.kneel; this.kick = 0; this.fleeT = 0;
-    this.hp = T.hp;
+    this.hp = this.hpMax = T.boss ? Math.round(T.hp * (1 + 0.9 * (nPlayers() - 1)) * (1 + 0.4 * bossTier())) : T.hp; // 지휘관: 사람이 늘면 체력도 는다(한 명 늘 때마다 0.9배씩 더)
+    this.hs = T.boss ? T.scale : 1; // 피격 판정·총구 높이에 쓰는 몸집 배율
+    this.boss = T.boss ? { phase: 0, hpK: 1, stagT: 0, stagCd: 0, callT: 0, shellT: rr(3.5, 5), expose: false, chase: null, lastK: 1, seen: false, cue: 0, lockAt: 0 } : null; // lockAt: 이 시각까지는 표적을 바꾸지 않는다
     this.state = 'hunt';
     this.tg = player; this.tgT = Math.random(); // 표적: 플레이어 또는 아군
     this.path = null; this.pi = 0; this.repath = 0; this.goalX = x; this.goalZ = z; this.stuck = 0;
     this.lastKnown = new THREE.Vector3().copy(player.pos);
     this.canSee = false; this.seeT = Math.random() * 0.2; this.seenFor = 0; this.unseenFor = 0;
-    this.react = 0; this.burst = 0; this.shotCd = 0; this.burstCd = rr(0.2, 0.8); this.mag = T.sniper ? 5 : T.key === 'heavy' ? 60 : 30; this.reload = 0; this.token = false;
+    this.react = 0; this.burst = 0; this.shotCd = 0; this.burstCd = rr(0.2, 0.8); this.mag = this.magSize(); this.reload = 0; this.token = false;
     this.tactic = 0; this.speed = 0; this.flinch = 0; this.flinchSide = 1; this.aim = 0; this.aimPitch = 0; this.flashT = 0;
     this.dead = false; this.deadT = 0; this.fall = 1; this.gone = false;
     this.skill = 0.85 + (game.wave - 1) * 0.07;
@@ -1104,6 +1126,7 @@ class Enemy {
     if (this.laser) { scene.remove(this.laser); this.laser = null; }
     this.gone = true;
   }
+  magSize() { const T = this.T; return T.mag || (T.sniper ? 5 : T.key === 'heavy' ? 60 : 30); }
   setPath(x, z) {
     const p = findPath(this.pos.x, this.pos.z, x, z);
     if (p && p.length) { this.path = p; this.pi = p.length > 1 ? 1 : 0; this.goalX = x; this.goalZ = z; return true; }
@@ -1114,14 +1137,14 @@ class Enemy {
     if (this.token) { tokens--; this.token = false; }
   }
   pickSpot() {
-    const T = this.T, P = this.tg, needCover = this.reload > 0 || this.hp < T.hp * 0.35, px = P.pos.x, py = P.pos.y + P.eye, pz = P.pos.z;
+    const T = this.T, P = this.tg, needCover = !T.open && (this.reload > 0 || (!T.boss && this.hp < T.hp * 0.35)), px = P.pos.x, py = P.pos.y + P.eye, pz = P.pos.z; // 지휘관은 다쳐도 물러서지 않는다
     let best = null, bs = -1e9;
     for (let k = 0; k < 10; k++) {
       const c = cellNear(this.pos.x, this.pos.z, T.sniper ? 16 : 11);
       if (!c) continue;
       const dP = Math.hypot(c.x - px, c.z - pz);
       let s = -Math.abs(dP - this.pref) * 0.45 - Math.hypot(c.x - this.pos.x, c.z - this.pos.z) * 0.15;
-      const vis = losClear(c.x, 1.7, c.z, px, py, pz);
+      const vis = losClear(c.x, 1.7 * this.hs, c.z, px, py, pz);
       s += needCover ? (vis ? -5 : 5) : vis ? 5 : -2;
       if (dP < (T.key === 'rusher' ? 2.5 : 6)) s -= 6;
       for (const o of enemies) if (o !== this && !o.dead && Math.hypot(o.goalX - c.x, o.goalZ - c.z) < 2.5) s -= 3;
@@ -1131,6 +1154,7 @@ class Enemy {
     this.kneel = Math.random() < T.kneel;
   }
   fleeFrom(p) {
+    if (this.T.boss) return; // 지휘관은 수류탄을 피하지 않는다
     let best = null, bd = 0;
     for (let k = 0; k < 8; k++) {
       const c = cellNear(this.pos.x, this.pos.z, 10);
@@ -1148,7 +1172,7 @@ class Enemy {
   }
   // 구르기: 그 방향으로 3.4m가 비어 있을 때만
   tryRoll(dx, dz) {
-    if (this.rollT > 0 || game.time < (this.rollCd || 0) || !MOCAP.clips || !MOCAP.clips.Roll || !this.body.playOver || this.T.key === 'heavy' || this.T.sniper) return false;
+    if (this.rollT > 0 || game.time < (this.rollCd || 0) || !MOCAP.clips || !MOCAP.clips.Roll || !this.body.playOver || this.T.key === 'heavy' || this.T.sniper || this.T.boss) return false;
     for (let d = 0.5; d <= 3.4; d += 0.4) if (blockedAt(this.pos.x + dx * d, this.pos.z + dz * d)) return false;
     if (!this.body.playOver('Roll', { full: true, rate: 1.25, tin: 0.1, tout: 0.2, force: true })) return false;
     this.rollDur = this.rollT = 1.47 / 1.25;
@@ -1167,14 +1191,19 @@ class Enemy {
       const sc = Math.hypot(a.pos.x - this.pos.x, a.pos.z - this.pos.z) - (this.tg === a ? 4 : 0);
       if (sc < bs) { bs = sc; best = a; }
     }
-    if (best !== this.tg) { this.tg = best; this.seenFor = 0; this.react = Math.max(this.react, 0.3); this.aimT = 0; this.seeT = 0; }
+    if (best !== this.tg) { this.tg = best; this.seenFor = 0; this.react = Math.max(this.react, 0.3); this.aimT = 0; this.seeT = 0; if (this.boss) this.boss.lockAt = game.time + 4; }
   }
   fire() {
-    const T = this.T, P = this.tg, drop = this.crouch * 0.37, ox = this.pos.x, oy = 1.48 - drop, oz = this.pos.z;
+    const T = this.T, P = this.tg, drop = this.crouch * 0.37, ox = this.pos.x, oy = (1.48 - drop) * this.hs, oz = this.pos.z;
     if (T.sniper) _d.set(this.aimPt.x - ox, this.aimPt.y - oy, this.aimPt.z - oz);
+    else if (T.suppress && !this.canSee) _d.set(this.lastKnown.x - ox, this.lastKnown.y + 1.17 - oy, this.lastKnown.z - oz); // 제압 사격: 마지막으로 본 자리
     else _d.set(P.pos.x - ox, P.pos.y + P.eye * 0.72 - oy, P.pos.z - oz);
     const dist = _d.length();
     _d.multiplyScalar(1 / dist);
+    if (T.sweep) { // 총구는 몸이 향한 쪽을 따라간다: 옆으로 크게 움직인 표적에게는 돌아설 때까지 탄이 닿지 않는다
+      const dy = angDiff(this.aimYaw, Math.atan2(_d.x, _d.z));
+      if (Math.abs(dy) > T.sweep) { const a = this.aimYaw + Math.sign(dy) * T.sweep, h = Math.hypot(_d.x, _d.z); _d.x = Math.sin(a) * h; _d.z = Math.cos(a) * h; }
+    }
     const sig = T.sniper ? 0.005 : ((0.056 * T.sig) / this.skill) * (1 + Math.min(P.hspeed, 7) * 0.1) * (this.seenFor < 1 ? 1.5 : 1) * (P.crouch > 0.5 || P.crouch === true ? 0.9 : 1);
     _r.crossVectors(_d, UP).normalize();
     _u.crossVectors(_r, _d);
@@ -1203,12 +1232,12 @@ class Enemy {
   }
   // 총구 화염·예광탄·총성. 참가자 화면에서는 방장이 알려 준 탄착점으로 그린다
   shotFx(ex, ey, ez) {
-    const T = this.T, drop = this.crouch * 0.37, mx = this.pos.x + Math.sin(this.aimYaw) * 0.85, mz = this.pos.z + Math.cos(this.aimYaw) * 0.85, my = 1.47 - drop;
+    const T = this.T, drop = this.crouch * 0.37, mx = this.pos.x + Math.sin(this.aimYaw) * 0.85 * this.hs, mz = this.pos.z + Math.cos(this.aimYaw) * 0.85 * this.hs, my = (1.47 - drop) * this.hs;
     tracers.spawn(mx, my, mz, ex, ey, ez);
     this.flashT = 0.05;
     this.kick = 1;
     this.body.flash.rotation.z = Math.random() * TAU;
-    SFX.playAt(T.sniper ? 'shotDMR' : 'shotFar', mx, my, mz, T.sniper ? 1.3 : 0.95, T.key === 'heavy' ? rr(0.78, 0.86) : rr(0.93, 1.07));
+    SFX.playAt(T.sniper ? 'shotDMR' : 'shotFar', mx, my, mz, T.sniper ? 1.3 : T.boss ? 1.15 : 0.95, T.key === 'jugg' ? rr(0.66, 0.72) : T.key === 'heavy' || T.boss ? rr(0.78, 0.86) : rr(0.93, 1.07));
   }
   // dir: 탄 진행 방향(없으면 폭발), power: 래그돌에 줄 충격, blast: 폭발 정보
   damage(d, part, dir, power, blast, src) {
@@ -1219,15 +1248,16 @@ class Enemy {
       this.flinch = Math.max(this.flinch, T.flinch);
       this.flinchSide = Math.random() < 0.5 ? -1 : 1;
       this.localHitT = game.time;
-      if (this.body.playOver && !blast) this.body.playOver(part === 2 ? 'HitHead' : 'HitChest', { peak: T.flinch >= 1 ? 1 : 0.45 });
+      if (this.body.playOver && !blast && !(T.boss && bossArmor(this, dir, blast) < 1)) this.body.playOver(part === 2 ? 'HitHead' : 'HitChest', { peak: T.flinch >= 1 ? 1 : T.boss ? 0.3 : 0.45 });
       return false;
     }
     this.hitN = (this.hitN + 1) & 15;
+    if (T.boss) d = bossHit(this, d, dir, blast); // 방탄판·비틀거림
     this.hp -= d;
     this.flinch = Math.max(this.flinch, T.flinch);
     this.flinchSide = Math.random() < 0.5 ? -1 : 1;
-    if (this.hp > 0 && this.body.playOver && !blast) {
-      this.body.playOver(part === 2 ? 'HitHead' : 'HitChest', { peak: T.flinch >= 1 ? 1 : 0.45 });
+    if (this.hp > 0 && this.body.playOver && !blast && !(T.boss && (this.boss.lastK < 1 || this.boss.stagT > 0))) { // 방탄판에 맞은 탄에는 움찔하지 않는다
+      this.body.playOver(part === 2 ? 'HitHead' : 'HitChest', { peak: T.flinch >= 1 ? 1 : T.boss ? 0.3 : 0.45 });
       // 맞으면 가끔 옆으로 몸을 던져 피한다
       if (dir && this.hp < T.hp * 0.8 && Math.random() < 0.3) { const sg = Math.random() < 0.5 ? -1 : 1, dl = Math.hypot(dir.x, dir.z) || 1; this.tryRoll((-dir.z / dl) * sg, (dir.x / dl) * sg) || this.tryRoll((dir.z / dl) * sg, (-dir.x / dl) * sg); }
     }
@@ -1238,11 +1268,14 @@ class Enemy {
       this.aimT *= 0.4;
       if (this.burst > 0 && Math.random() < 0.4) { this.burst = 0; this.dropToken(); this.burstCd = rr(0.4, 0.9); }
     }
-    // 쏜 쪽으로 주의를 돌린다 (감시탑 지원 사격은 위치를 모른다)
-    if (src && !src.ow) { if (src.alive && Math.random() < 0.6) { this.tg = src; this.tgT = rr(2, 3.5); } }
+    // 쏜 쪽으로 주의를 돌린다 (감시탑 지원 사격은 위치를 모른다). 지휘관은 한번 고른 표적을 4초는 놓지 않는다: 둘이 번갈아 쏴서 제자리에서 돌게 만들 수 없다
+    const tg0 = this.tg;
+    if (T.boss && game.time < this.boss.lockAt && this.tg.alive) { /* 표적 유지 */ }
+    else if (src && !src.ow) { if (src.alive && Math.random() < 0.6) { this.tg = src; this.tgT = rr(2, 3.5); } }
     else if (!src && this.tg !== player) { this.tg = player; this.tgT = rr(2, 3.5); }
-    this.lastKnown.copy(src && !src.ow ? src.pos : src ? this.tg.pos : player.pos);
-    this.unseenFor = 0;
+    if (T.boss && this.tg !== tg0) this.boss.lockAt = game.time + 4;
+    const other = T.boss && this.tg === tg0 && game.time < this.boss.lockAt && tg0.alive && (src && !src.ow ? src : player) !== tg0; // 지휘관이 다른 표적을 붙들고 있는 동안에는 쏜 쪽으로 돌아서지 않는다
+    if (!other) { this.lastKnown.copy(src && !src.ow ? src.pos : src ? this.tg.pos : player.pos); this.unseenFor = 0; }
     if (this.state !== 'combat') { this.state = 'combat'; this.react = 0.35; this.tactic = 0.2; }
     if (this.hp <= 0) { this.die(dir, part, power, blast, src); return true; }
     return false;
@@ -1253,7 +1286,7 @@ class Enemy {
     this.dead = true;
     this.deadT = 0;
     this.dropToken();
-    if (!(part === 2 && !blast) || Math.random() < 0.3) SFX.playAt('grunt', this.pos.x, 1.5, this.pos.z, 0.9, rr(0.92, 1.05) * (T.key === 'heavy' ? 0.86 : 1));
+    if (!(part === 2 && !blast) || Math.random() < 0.3) SFX.playAt('grunt', this.pos.x, 1.5, this.pos.z, T.boss ? 1.4 : 0.9, rr(0.92, 1.05) * (T.boss ? 0.72 : T.key === 'heavy' ? 0.86 : 1));
     if (this.laser) { scene.remove(this.laser); this.laser = null; }
     this.fall = dir && Math.sin(this.bodyYaw) * dir.x + Math.cos(this.bodyYaw) * dir.z > 0 ? 1 : -1;
     this.fallSnd = clip === 'Death' ? 0.95 : clip === 'Knockback' ? 0.35 : blast ? 0.8 : 0.5;
@@ -1286,9 +1319,10 @@ class Enemy {
     // 자동 회복이 없으므로 의무 보급품이 전투 중 유일한 회복 수단: 가장 다친 사람의 체력이 낮을수록 잘 나온다
     let low = 1;
     for (const h of humans()) if (h.alive) low = Math.min(low, h === player ? player.hp / prog.maxHp : h.hp / 100);
-    const pm = low < 0.4 ? 0.36 : low < 0.75 ? 0.2 : 0.05, rn = Math.random(), drop = rn < pm ? 'med' : rn < pm + 0.36 ? 'ammo' : '';
+    const pm = low < 0.4 ? 0.36 : low < 0.75 ? 0.2 : 0.05, rn = Math.random(), drop = T.boss ? '' : rn < pm ? 'med' : rn < pm + 0.36 ? 'ammo' : '';
     if (drop) addPickup(drop, this.pos.x, this.pos.z);
     if (coop.host) coopSendDie(this, part, dir, power, blast, clip, src && src.net ? src.pid : 0, drop, head);
+    if (T.boss) bossDown(this, true);
   }
   update(dt) {
     if (this.dead) {
@@ -1299,19 +1333,23 @@ class Enemy {
     }
     if (this.puppet) { this.updatePuppet(dt); return; }
     this.tgT -= dt;
-    if (this.tgT <= 0 || (this.tg !== player && !this.tg.alive)) { this.tgT = rr(1.2, 2); this.pickTarget(); }
-    const T = this.T, P = this.tg, px = P.pos.x, pz = P.pos.z, dP = Math.hypot(px - this.pos.x, pz - this.pos.z), drop = this.crouch * 0.37, run = runSpeed() * T.speed;
+    if ((this.tgT <= 0 && !(this.boss && game.time < this.boss.lockAt)) || (this.tg !== player && !this.tg.alive)) { this.tgT = rr(1.2, 2); this.pickTarget(); }
+    const T = this.T, P = this.tg, px = P.pos.x, pz = P.pos.z, dP = Math.hypot(px - this.pos.x, pz - this.pos.z), drop = this.crouch * 0.37, rage = T.boss && this.boss.phase === 2, run = runSpeed() * T.speed * (rage ? T.rage[0] : 1);
     this.seeT -= dt;
     if (this.seeT <= 0) {
       this.seeT = 0.16 + Math.random() * 0.1;
-      this.canSee = P.alive && dP < 95 && losClear(this.pos.x, 1.7 - drop, this.pos.z, px, P.pos.y + P.eye, pz);
+      this.canSee = P.alive && dP < 95 && losClear(this.pos.x, (1.7 - drop) * this.hs, this.pos.z, px, P.pos.y + P.eye, pz);
     }
     if (this.canSee) { this.lastKnown.copy(P.pos); this.seenFor += dt; this.unseenFor = 0; }
     else { this.unseenFor += dt; this.seenFor = Math.max(0, this.seenFor - dt * 2); }
     this.kick = damp(this.kick, 0, 22, dt);
+    const hold = T.boss ? bossTick(this, dt) : false; // 지휘관: 비틀거리거나 포격을 지시하는 동안에는 멈춰 선다
 
     let speed = 0;
-    if (this.fleeT > 0) { // 수류탄 회피 중
+    if (hold) {
+      this.aimT = 0;
+      if (this.burst > 0) { this.burst = 0; this.dropToken(); }
+    } else if (this.fleeT > 0) { // 수류탄 회피 중
       this.fleeT -= dt;
       speed = run * 1.08;
       this.aimT = 0;
@@ -1330,18 +1368,20 @@ class Enemy {
             this.setPath(gx, gz);
             this.repath = rr(1.6, 2.6);
           }
-          speed = this.obj && Math.hypot(this.obj.x - this.pos.x, this.obj.z - this.pos.z) < 2.6 ? 0 : run; // 지점에 닿으면 그 곁에 머문다(해제 작업)
+          speed = this.obj && Math.hypot(this.obj.x - this.pos.x, this.obj.z - this.pos.z) < 2.6 ? 0 : run * (T.far && dP > 28 ? T.far : 1); // 지점에 닿으면 그 곁에 머문다(해제 작업)
         }
       }
       if (this.state === 'combat') {
-        if (this.unseenFor > 2.4) { this.state = 'hunt'; this.repath = 0; this.burst = 0; this.aimT = 0; this.dropToken(); }
+        if (this.unseenFor > (T.suppress || 2.4)) { this.state = 'hunt'; this.repath = 0; this.burst = 0; this.aimT = 0; this.dropToken(); }
         else {
           this.tactic -= dt;
           if (this.tactic <= 0) { this.pickSpot(); this.tactic = T.sniper ? rr(5, 9) : rr(2.6, 4.8); }
           speed = this.burst > 0 ? T.moveFire : run * 0.72;
+          if (T.far && dP > 20) speed = run * 1.5; // 철갑: 표적이 멀면 쏘면서도 성큼성큼 다가온다(멀리서 장전 틈만 노리는 것을 막는다)
           if (this.reload > 0) {
             this.reload -= dt;
-            if (this.reload <= 0) this.mag = T.sniper ? 5 : T.key === 'heavy' ? 60 : 30;
+            if (T.open) speed = 0; // 그 자리에 앉아 탄창을 간다
+            if (this.reload <= 0) { this.mag = this.magSize(); if (T.boss) { this.burstCd = T.windup || 0; SFX.playAt('bolt', this.pos.x, 1.4, this.pos.z, 1.6, 0.8); } } // 지휘관: 일어서서 다시 겨누기까지 늘 같은 뜸이 있다
           } else if (T.sniper) { // 저격수: 붉은 조준선으로 예고한 뒤 한 발
             if (this.cool > 0) { this.cool -= dt; this.aimT = 0; }
             else if (this.canSee) {
@@ -1358,26 +1398,34 @@ class Enemy {
                 }
               }
             } else this.aimT = Math.max(0, this.aimT - dt * 2.5);
-          } else if (this.canSee) {
+          } else if (this.canSee || T.suppress) { // 제압 사격을 하는 적은 표적이 숨어도 계속 쏜다
             this.react -= dt;
             if (this.react <= 0) {
               if (this.burst > 0) {
                 this.shotCd -= dt;
                 if (this.shotCd <= 0) {
                   this.fire();
-                  this.shotCd = T.rof;
+                  if (T.boss) this.shotCd += rage ? T.rage[2] : T.rof; // 지휘관: 프레임 간격에 묻히는 자투리 시간을 넘겨 연사 속도를 지킨다
+                  else this.shotCd = T.rof;
                   this.burst--;
                   this.mag--;
                   if (this.burst <= 0 || this.mag <= 0) {
                     this.burst = 0;
                     this.dropToken();
                     this.burstCd = rr(0.7, 1.6) / this.skill;
-                    if (this.mag <= 0) { this.reload = T.key === 'heavy' ? 3.4 : 2.4; this.tactic = 0; }
+                    if (this.mag <= 0) {
+                      this.reload = T.boss ? (rage ? T.rage[1] : T.reloadT) : T.key === 'heavy' ? 3.4 : 2.4;
+                      this.tactic = T.open ? this.reload + rr(0.2, 0.6) : 0;
+                      if (T.boss) SFX.playAt('magOut', this.pos.x, 1.4, this.pos.z, 1.6, 0.8); // 장전 소리가 들리면 틈이다
+                    }
                   }
                 }
               } else {
                 this.burstCd -= dt;
-                if (this.burstCd <= 0 && tokens < maxTokens()) { tokens++; this.token = true; this.burst = T.burst[0] + ((Math.random() * (T.burst[1] - T.burst[0] + 1)) | 0); this.shotCd = 0; }
+                if (this.burstCd <= 0 && (T.boss || tokens < maxTokens())) { // 지휘관은 사격 순번을 기다리지 않는다
+                  if (!T.boss) { tokens++; this.token = true; }
+                  this.burst = T.burst[0] + ((Math.random() * (T.burst[1] - T.burst[0] + 1)) | 0); this.shotCd = 0;
+                }
               }
             }
           } else if (this.burst > 0) { this.burst = 0; this.dropToken(); }
@@ -1385,6 +1433,7 @@ class Enemy {
       }
     }
 
+    if (T.open && this.reload > 0) speed = 0; // 지휘관(철갑): 표적을 놓쳐도 장전을 마칠 때까지 그 자리에 앉아 있다
     // 경로 추종: 가감속이 있는 속도 + 다른 적과의 간격 유지
     if (this.back) speed = Math.min(speed, 2.2);
     let dvx = 0, dvz = 0;
@@ -1426,8 +1475,9 @@ class Enemy {
     let ta = this.aimYaw;
     if (combat) ta = Math.atan2(this.lastKnown.x - this.pos.x, this.lastKnown.z - this.pos.z);
     else if (mv > 0.3) ta = Math.atan2(this.vx, this.vz);
-    this.aimYaw += clamp(angDiff(this.aimYaw, ta), -6.5 * dt, 6.5 * dt);
-    this.present(dt, combat, mv, combat && mv < 0.5 && (this.reload > 0 || (this.kneel && this.canSee)), P, dP);
+    const tr = (T.turn || 6.5) * dt; // 지휘관은 몸이 무거워 천천히 돌아선다(옆으로 돌아 들어갈 틈). 비틀거리는 동안에는 돌아서지 못한다
+    if (!(T.boss && this.boss.stagT > 0)) this.aimYaw += clamp(angDiff(this.aimYaw, ta), -tr, tr);
+    this.present(dt, combat, mv, hold || (T.open && this.reload > 0) || (combat && mv < 0.5 && (this.reload > 0 || (this.kneel && this.canSee))), P, dP);
   }
   // 몸 방향·자세·발소리·애니메이션·조준선. AI(방장)와 꼭두각시(참가자)가 함께 쓴다
   present(dt, combat, mv, wantCrouch, P, dP) {
@@ -1442,7 +1492,7 @@ class Enemy {
     this.back = back;
     this.bodyYaw += clamp(angDiff(this.bodyYaw, tb), -9 * dt, 9 * dt);
     this.aim = damp(this.aim, combat ? 1 : 0, 7, dt);
-    if (this.canSee && P) this.aimPitch = clamp(Math.atan2(P.pos.y + P.eye * 0.72 - (1.48 - drop), Math.max(dP, 1)), -0.6, 0.6);
+    if (this.canSee && P) this.aimPitch = clamp(Math.atan2(P.pos.y + P.eye * 0.72 - (1.48 - drop) * this.hs, Math.max(dP, 1)), -0.6, 0.6);
     this.crouch = damp(this.crouch, wantCrouch ? 1 : 0, 6, dt);
     this.flinch = damp(this.flinch, 0, 9, dt);
     this.flashT -= dt;
@@ -1450,7 +1500,7 @@ class Enemy {
       this.stepAcc = (this.stepAcc || 0) + mv * dt;
       if (this.stepAcc > (mv > 3 ? 1.75 : 1.35)) {
         this.stepAcc = 0;
-        if (Math.hypot(this.pos.x - player.pos.x, this.pos.z - player.pos.z) < 30) SFX.playAt('step', this.pos.x, 0.1, this.pos.z, T.key === 'heavy' ? 1.5 : 1.0, T.key === 'heavy' ? 0.84 : rr(0.95, 1.1));
+        if (Math.hypot(this.pos.x - player.pos.x, this.pos.z - player.pos.z) < (T.boss ? 45 : 30)) SFX.playAt('step', this.pos.x, 0.1, this.pos.z, T.boss ? 2.2 : T.key === 'heavy' ? 1.5 : 1.0, T.key === 'jugg' ? 0.66 : T.key === 'heavy' || T.boss ? 0.84 : rr(0.95, 1.1));
       }
     }
     this.body.animate(this, dt);
@@ -1502,6 +1552,7 @@ class Enemy {
       if (this.body.playOver) this.body.playOver('HitChest', { peak: this.T.flinch >= 1 ? 1 : 0.45 });
     }
     n.hitN = hn;
+    if (this.boss) bossPuppet(this, n);
     const P = coopEntity((fl >> 5) & 3), dP = P ? Math.hypot(P.pos.x - this.pos.x, P.pos.z - this.pos.z) : 30;
     this.tg = P || player;
     this.canSee = !!(fl & 16);
@@ -1519,10 +1570,36 @@ function pickType() {
   return 'rifle';
 }
 
+// 지휘관이 나타날 자리: 가장 가까운 사람에게서 40m쯤 떨어지고 누구에게도 보이지 않는 곳(너무 멀면 오래 걸어와야 한다)
+function bossSpawn(type) {
+  const hs = humans().filter((h) => h.alive || h === player);
+  let best = null, bs = -1e9;
+  for (let k = 0; k < 70; k++) {
+    const c = NAV.free[(Math.random() * NAV.free.length) | 0], x = cellX(c), z = cellZ(c);
+    let d = 1e9, seen = false;
+    for (const h of hs) {
+      d = Math.min(d, Math.hypot(x - h.pos.x, z - h.pos.z));
+      if (!seen && losClear(x, 2.2, z, h.pos.x, h.pos.y + h.eye, h.pos.z)) seen = true;
+    }
+    if (d < 24) continue;
+    const s = -Math.abs(d - 40) - (seen ? 40 : 0) + Math.random() * 4;
+    if (s > bs) { bs = s; best = { x, z }; }
+  }
+  if (!best) return null;
+  const e = new Enemy(best.x, best.z, type, coop.host ? ++coop.nextId : 0);
+  enemies.push(e);
+  return e;
+}
 function spawnEnemy(fx, fz, type) {
   const nid = coop.host ? ++coop.nextId : 0;
   if (fx !== undefined) { const e = new Enemy(fx, fz, type || 'rifle', nid); enemies.push(e); return e; }
   const kind = pickType(), hs = humans();
+  if (TYPES[kind].boss) { // 지휘관은 따로 고른 자리에
+    if (coop.host) coop.nextId--; // 번호는 bossSpawn이 매긴다
+    const b = bossSpawn(kind);
+    if (!b) game.queue.unshift(kind);
+    return b;
+  }
   let best = -1, bs = -1e9;
   for (let k = 0; k < 26; k++) {
     const c = NAV.free[(Math.random() * NAV.free.length) | 0], x = cellX(c), z = cellZ(c);
@@ -1541,6 +1618,249 @@ function spawnEnemy(fx, fz, type) {
   const e = new Enemy(cellX(best), cellZ(best), kind, nid);
   enemies.push(e);
   return e;
+}
+
+// ───────────────────────── 지휘관(보스)
+// 단계: 체력 100~66% / 66~33% / 33~0%. 단계가 넘어갈 때 증원을 부르고 보급품을 떨군다. 마지막 단계에서는 더 빨라진다(격노).
+// 방탄: 정면에서 맞으면 피해가 T.armor 배로 줄고(옆은 그 중간), 등 뒤에서는 그대로 들어간다. 장전·포격 지시·비틀거림 중에는 방탄이 풀려 어디를 맞아도 T.weak 배(1.25)로 들어간다.
+// 폭발은 방탄을 무시하고, 피해가 50 이상이면 2.6초 비틀거리게 한다(11초에 한 번).
+// 협동에서는 방장의 폰이 지휘관을 움직이고, 체력과 상태를 적 상태에 실어 보낸다. 포격 지점은 방장이 정해 알리고, 피해는 각자의 폰이 자기 위치로 계산한다(내 화면에서 피했으면 피한 것).
+const BOSS_STAG = 2.6, BOSS_STAG_CD = 11, BOSS_STAG_DMG = 50;
+let bossDownAt = -99; // 마지막으로 지휘관을 쓰러뜨린 시각(게임 시간)
+const bossTier = () => (camp.on ? 0 : Math.max(0, Math.floor((game.wave - 5) / 10))); // 생존: 15웨이브부터 열 웨이브마다 한 단계씩 단단해진다
+const bossWave = (n) => (n % 5 ? null : n >= 25 ? ['jugg', 'bomb'] : [(n / 5) % 2 ? 'jugg' : 'bomb']); // 생존: 5웨이브마다 지휘관(철갑 → 화약고 번갈아, 25웨이브부터 둘 다)
+const bossOf = () => enemies.find((e) => e.boss && !e.dead) || null;
+const bossFlags = (e) => (e.boss.expose ? 1 : 0) | (e.boss.stagT > 0 ? 2 : 0) | (e.boss.callT > 0 ? 4 : 0) | (e.boss.phase << 3) | (e.reload > 0 ? 32 : 0) | (e.burst > 0 ? 64 : 0);
+function bossArmor(e, dir, blast) { // 이 탄이 주는 피해의 배율
+  const b = e.boss;
+  if (!b || blast || !dir) return 1;
+  if (b.expose) return e.T.weak || 1; // 틈: 방탄이 풀리고 더 아프게 들어간다
+  const dl = Math.hypot(dir.x, dir.z) || 1, f = (Math.sin(e.aimYaw) * dir.x + Math.cos(e.aimYaw) * dir.z) / dl; // 1: 등 뒤에서 날아온 탄, -1: 정면에서 날아온 탄
+  return f > 0.3 ? 1 : f > -0.25 ? (1 + e.T.armor) / 2 : e.T.armor;
+}
+function bossHit(e, d, dir, blast) { // 방장(또는 혼자): 실제로 들어갈 피해를 돌려준다
+  const b = e.boss;
+  if (blast && d >= BOSS_STAG_DMG && b.stagCd <= 0 && b.stagT <= 0) {
+    b.stagT = BOSS_STAG; b.stagCd = BOSS_STAG_CD; b.callT = 0; b.chase = null; b.expose = true;
+    e.burst = 0; e.burstCd = 1.2;
+    bossStagFx(e);
+  }
+  b.lastK = bossArmor(e, dir, blast);
+  return d * b.lastK;
+}
+function bossStagFx(e) { // 모든 폰
+  if (e.body.playOver) e.body.playOver('HitChest', { peak: 1, force: true });
+  feed(`${e.T.short} 비틀거림 · 지금 쏴라`, true);
+  SFX.playAt('impactM', e.pos.x, 1.4, e.pos.z, 1.8, 0.6);
+}
+function bossIntro(e) { // 모든 폰: 모습을 드러냈다
+  feed(`${e.T.name} 등장`, true);
+  SFX.play('wave', 0.5, 0.7);
+}
+function bossBanner(keys) { // 지휘관이 나오는 웨이브·단계의 시작 알림
+  const T = TYPES[keys[0]];
+  showMsg(keys.map((k) => TYPES[k].name).join(' · '), keys.length > 1 ? '두 지휘관이 함께 온다' : `${T.title} · ${T.tip}`, 4.6);
+}
+function bossDrop(e, kinds) { // 방장(또는 혼자): 지휘관 곁에 보급품. 협동에서는 각자의 화면에 따로 놓인다
+  for (const k of kinds) {
+    const c = cellNear(e.pos.x, e.pos.z, 5) || { x: e.pos.x, z: e.pos.z };
+    addPickup(k, c.x, c.z);
+    if (coop.host) sendEv({ t: 'pk', k: k === 'ammo' ? 1 : 2, x: r2(c.x), z: r2(c.z) });
+  }
+}
+function bossPhase(e) { // 방장(또는 혼자): 단계가 넘어갔다 → 증원을 부르고 보급품을 떨군다
+  const b = e.boss, adds = misScale(e.T.adds[b.phase - 1] || []);
+  if (camp.on) { if (camp.st) camp.st.queue.push(...adds); }
+  else { game.queue.push(...adds); game.toSpawn += adds.length; }
+  bossDrop(e, ['med', 'ammo', 'ammo']);
+  b.shellT = Math.min(b.shellT, 2);
+  bossPhaseFx(e, b.phase);
+}
+function bossPhaseFx(e, ph) { // 모든 폰
+  feed(ph === 2 ? `${e.T.short} 격노 · 증원 접근` : `${e.T.short} 증원 호출`, true);
+  SFX.play('wave', 0.45, ph === 2 ? 0.6 : 0.82);
+}
+function bossDown(e, host) { // 지휘관 제거. 방장(또는 혼자)은 보급품을 떨군다
+  if (host) bossDrop(e, ['med', 'med', 'ammo', 'ammo']);
+  showMsg(`${e.T.short} 제거`, e.T.title, 2.8);
+  bossDownAt = game.time;
+  SFX.play('wave', 0.6, 1.2);
+  if (!bossOf()) barrageClear(); // 날아오던 포격도 멎는다
+}
+// 방장(또는 혼자): 지휘관의 단계 전환·비틀거림·포격을 굴린다. 돌려주는 값: 지금 멈춰 서 있어야 하는가
+function bossTick(e, dt) {
+  const T = e.T, b = e.boss;
+  if (!b.seen) { b.seen = true; bossIntro(e); }
+  b.hpK = clamp(e.hp / e.hpMax, 0, 1);
+  const ph = b.hpK <= 0.33 ? 2 : b.hpK <= 0.66 ? 1 : 0;
+  if (ph > b.phase) { b.phase = ph; bossPhase(e); }
+  if (e.reload > 0 && e.state !== 'combat') { e.reload -= dt; if (e.reload <= 0) { e.mag = e.magSize(); e.burstCd = T.windup || 0; } } // 표적을 놓쳐도 장전은 마친다
+  if (b.stagCd > 0) b.stagCd -= dt;
+  let hold = false;
+  if (b.stagT > 0) { b.stagT -= dt; hold = true; }
+  else if (b.callT > 0) { // 무전으로 포격을 지시하는 중
+    hold = true;
+    if ((b.callT -= dt) <= 0) bossBarrage(e);
+  } else {
+    const c = b.chase;
+    if (c && (c.t -= dt) <= 0) { // 뒤쫓는 포격: 표적이 지금 있는 자리에 한 발씩
+      c.t = 0.6;
+      if (c.tg.alive) barrageSend(c.tg.pos.y, T.shell[0] * 0.8, Math.round(T.shell[1] * 0.7), [[r2(c.tg.pos.x), r2(c.tg.pos.z), 1.25]]);
+      if (--c.n <= 0 || !c.tg.alive) b.chase = null;
+    }
+    const every = T.shellEvery[b.phase], tg = e.tg;
+    if (every > 0 && !b.chase) {
+      b.shellT -= dt;
+      if (b.shellT <= 0 && tg && tg.alive && e.reload <= 0 && e.unseenFor < 8 && (!T.flush || (!e.canSee && e.unseenFor > 0.8))) {
+        b.shellT = every * rr(0.85, 1.15);
+        if (T.call > 0) { // 멈춰 서서 무전을 친다: 그동안 방탄이 풀린다
+          b.callT = T.call;
+          if (e.burst > 0) { e.burst = 0; e.dropToken(); }
+          SFX.playAt('equip', e.pos.x, 1.5, e.pos.z, 1.8, 0.6);
+        } else bossBarrage(e);
+      }
+    }
+  }
+  b.expose = b.stagT > 0 || b.callT > 0 || e.reload > 0;
+  b.left = b.expose ? Math.max(b.stagT, b.callT, e.reload) : 0; // 방탄이 풀려 있을 남은 시간
+  b.fire = e.burst > 0;
+  return hold;
+}
+// 방장(또는 혼자): 포격 무늬를 골라 지점을 정한다. 지점: [x, z, 원이 뜬 뒤 떨어지기까지(초)]
+function bossBarrage(e) {
+  const T = e.T, b = e.boss, tg = e.tg && e.tg.alive ? e.tg : null;
+  if (!tg) return;
+  const r = T.shell[0], fuse = T.shell[2] - 0.12 * b.phase, pts = [];
+  const add = (x, z, dl = 0) => { if (x > B.x0 && x < B.x1 && z > B.z0 && z < B.z1) pts.push([r2(x), r2(z), r2(fuse + dl)]); }; // 맵 밖으로 나가는 곳은 뺀다
+  const lay = (t, kind) => {
+    const tx = t.pos.x, tz = t.pos.z, vx = t === player ? player.vel.x : t.vx || 0, vz = t === player ? player.vel.z : t.vz || 0, a0 = Math.random() * TAU;
+    let dx = tx - e.pos.x, dz = tz - e.pos.z;
+    const dl = Math.hypot(dx, dz) || 1;
+    dx /= dl; dz /= dl;
+    if (kind === 'one') add(tx, tz);
+    else if (kind === 'two') { // 지금 자리와, 달아날 자리
+      add(tx, tz);
+      if (Math.hypot(vx, vz) > 1) add(tx + vx * 1.3, tz + vz * 1.3, 0.3); else add(tx + Math.cos(a0) * r * 1.4, tz + Math.sin(a0) * r * 1.4, 0.3);
+    } else if (kind === 'triple') { // 지금 자리와 그 둘레 두 곳
+      add(tx, tz);
+      for (let k = 0; k < 2; k++) add(tx + Math.cos(a0 + k * 2.3) * r * 1.35, tz + Math.sin(a0 + k * 2.3) * r * 1.35, 0.25 * (k + 1));
+    } else if (kind === 'line') { // 지휘관 쪽에서 표적을 지나 뒤까지 차례로: 옆으로 비켜야 한다
+      for (let i = -2; i <= 2; i++) add(tx + dx * i * r * 1.3, tz + dz * i * r * 1.3, (i + 2) * 0.22);
+    } else if (kind === 'ring') { // 둘레를 빙 둘러 가둔다: 가운데에 그대로 있어야 산다. 마지막 단계에서는 둘레가 터진 뒤 표적이 그때 있는 자리에 한 발 더 떨어진다
+      for (let i = 0; i < 6; i++) add(tx + Math.cos(a0 + (i * TAU) / 6) * r * 1.55, tz + Math.sin(a0 + (i * TAU) / 6) * r * 1.55);
+      if (b.phase === 2) b.chase = { n: 1, t: fuse, tg: t };
+    }
+  };
+  let kind;
+  if (T.flush) kind = b.phase === 2 ? 'two' : 'one';
+  else {
+    const pool = b.phase === 0 ? ['triple', 'line'] : b.phase === 1 ? ['triple', 'line', 'ring'] : ['ring', 'line', 'chase'];
+    kind = pool[(b.cue = (b.cue + 1 + ((Math.random() * (pool.length - 1)) | 0)) % pool.length)]; // 같은 무늬를 연달아 쓰지 않는다
+  }
+  if (kind === 'chase') b.chase = { n: 4, t: 0, tg };
+  else lay(tg, kind);
+  if (!T.flush && b.phase > 0) { // 협동: 다른 한 사람에게도 한 발
+    const others = humans().filter((h) => h.alive && h !== tg);
+    if (others.length) lay(pickOf(others), 'one');
+  }
+  if (pts.length) barrageSend(tg.pos.y, r, T.shell[1], pts);
+}
+function barrageSend(y, r, dmg, pts) { // 방장(또는 혼자): 내 화면에 깔고 모든 폰에 알린다
+  const m = { t: 'bt', y: y > 1.2 ? r2(y) : 0, r, d: dmg, p: pts };
+  if (coop.host) sendEv(m);
+  barrageApply(m);
+}
+function barrageApply(m) { // 모든 폰
+  if (!Array.isArray(m.p)) return;
+  const r = clamp(+m.r || 4, 1, 8), dmg = clamp(+m.d || 0, 0, 120), y = +m.y || 0;
+  let near = false;
+  for (const q of m.p.slice(0, 16)) {
+    const x = +q[0] || 0, z = +q[1] || 0;
+    barrageAdd(x, y, z, r, dmg, clamp(+q[2] || 1.5, 0.3, 4));
+    if (Math.hypot(x - player.pos.x, z - player.pos.z) < 22) near = true;
+  }
+  if (near) SFX.play('whiz', 0.55, 0.42); // 날아오는 소리
+}
+function bossPuppet(e, n) { // 참가자 화면의 지휘관: 방장이 보낸 체력·상태(적 상태의 7·8번째 값)
+  const b = e.boss, f = n.bfl | 0, ph = (f >> 3) & 3, stag = !!(f & 2), rl = !!(f & 32);
+  if (!b.seen) { b.seen = true; b.phase = ph; b.rl = rl; bossIntro(e); }
+  b.hpK = clamp((n.hpk | 0) / 1000, 0, 1);
+  if (ph > b.phase) { b.phase = ph; bossPhaseFx(e, ph); }
+  if (stag && b.stagT <= 0) bossStagFx(e);
+  b.stagT = stag ? 1 : 0;
+  b.callT = f & 4 ? 1 : 0;
+  b.expose = !!(f & 1);
+  b.left = b.expose ? (n.left | 0) / 10 : 0;
+  b.fire = !!(f & 64);
+  if (rl !== b.rl) { b.rl = rl; SFX.playAt(rl ? 'magOut' : 'bolt', e.pos.x, 1.4, e.pos.z, 1.6, 0.8); }
+  e.reload = rl ? 1 : 0;
+}
+// 포격 예고: 바닥의 붉은 원 안쪽이 차오르다가, 다 차면 그 자리에 떨어진다
+const brRingGeo = new THREE.RingGeometry(0.93, 1, 56), brDiscGeo = new THREE.CircleGeometry(1, 40);
+brRingGeo.rotateX(-Math.PI / 2); brDiscGeo.rotateX(-Math.PI / 2);
+const brRingMat = new THREE.MeshBasicMaterial({ color: 0xff3418, transparent: true, opacity: 0.95, depthWrite: false, fog: false, toneMapped: false });
+const brDiscMat = new THREE.MeshBasicMaterial({ color: 0xff3418, transparent: true, opacity: 0.28, depthWrite: false, fog: false, toneMapped: false });
+const barrage = { list: [], pool: [] };
+function barrageAdd(x, y, z, r, dmg, fuse) {
+  if (barrage.list.length >= 40) return;
+  let m = barrage.pool.pop();
+  if (!m) { m = { ring: new THREE.Mesh(brRingGeo, brRingMat), disc: new THREE.Mesh(brDiscGeo, brDiscMat) }; m.ring.renderOrder = m.disc.renderOrder = 4; m.ring.frustumCulled = m.disc.frustumCulled = false; }
+  m.ring.position.set(x, y + 0.09, z);
+  m.ring.scale.set(r, 1, r);
+  m.disc.position.set(x, y + 0.07, z);
+  m.disc.scale.set(0.01, 1, 0.01);
+  scene.add(m.ring, m.disc);
+  barrage.list.push({ x, y, z, r, dmg, t: fuse, dur: fuse, m, streak: false });
+}
+function barrageClear() {
+  for (const s of barrage.list) { scene.remove(s.m.ring, s.m.disc); barrage.pool.push(s.m); }
+  barrage.list.length = 0;
+  if (cache.shellIn) { cache.shellIn = false; el.shellWarn.classList.add('hidden'); }
+}
+function shellBoom(s) { // 모든 폰: 연출과, 내 위치로 계산한 내 피해. 원 한가운데가 가장 아프고 가장자리는 그 4분의 1
+  explode(s.x, s.y, s.z, true);
+  const hurtOf = (d) => s.dmg * (1 - 0.75 * (d / s.r) * (d / s.r));
+  const d = Math.hypot(player.pos.x - s.x, player.pos.z - s.z);
+  if (player.alive && d < s.r && Math.abs(player.pos.y - s.y) < 2.4) hurtPlayer(hurtOf(d), s);
+  if (!coop.on) for (const a of allies) { // 작전의 팀원
+    if (a.gone || !a.alive) continue;
+    const da = Math.hypot(a.pos.x - s.x, a.pos.z - s.z);
+    if (da < s.r) a.hurt(hurtOf(da));
+  }
+}
+function updateBarrage(dt) {
+  let inside = false; // 내가 원 안에 서 있나 → 화면 경고
+  for (const s of barrage.list) if (player.alive && Math.hypot(player.pos.x - s.x, player.pos.z - s.z) < s.r && Math.abs(player.pos.y - s.y) < 2.4) { inside = true; break; }
+  if (cache.shellIn !== inside) { cache.shellIn = inside; el.shellWarn.classList.toggle('hidden', !inside); }
+  for (let i = barrage.list.length - 1; i >= 0; i--) {
+    const s = barrage.list[i];
+    s.t -= dt;
+    const k = clamp(1 - s.t / s.dur, 0.01, 1);
+    s.m.disc.scale.set(s.r * k, 1, s.r * k);
+    if (!s.streak && s.t < 0.2) { s.streak = true; tracers.spawn(s.x + 4, s.y + 52, s.z + 3, s.x, s.y + 0.1, s.z); }
+    if (s.t <= 0) {
+      scene.remove(s.m.ring, s.m.disc);
+      barrage.pool.push(s.m);
+      barrage.list.splice(i, 1);
+      shellBoom(s);
+    }
+  }
+}
+// 지휘관 체력 막대(화면 위 가운데): 이름, 체력(66% · 33%에 눈금), 지금 상태
+function updateBossHud() {
+  const e = bossOf(), on = !!e;
+  if (cache.bossOn !== on) { cache.bossOn = on; el.boss.classList.toggle('hidden', !on); document.body.classList.toggle('bossOn', on); }
+  if (!e) return;
+  const b = e.boss, k = Math.round(b.hpK * 400);
+  setTxt('bossN', e.T.name);
+  if (cache.bossK !== k) { cache.bossK = k; el.bossFill.style.transform = `scaleX(${(k / 400).toFixed(4)})`; }
+  setTxt('bossS', b.stagT > 0 ? '비틀거림 · 지금 쏴라' : b.callT > 0 ? '포격 지시 중 · 지금 쏴라' : e.reload > 0 ? '장전 중 · 지금 쏴라' : b.fire && e.T.suppress ? '제압 사격 · 엄폐' : b.phase === 2 ? '격노 · 방탄' : '방탄');
+  if (cache.bossOpen !== b.expose) { cache.bossOpen = b.expose; el.boss.classList.toggle('open', b.expose); }
+  b.lm = b.expose ? Math.max(b.lm || 0, b.left || 0) : 0; // 틈이 닫히기까지 남은 시간을 줄어드는 선으로
+  const lk = b.lm > 0 ? Math.round(clamp((b.left || 0) / b.lm, 0, 1) * 100) : 0;
+  if (cache.bossLk !== lk) { cache.bossLk = lk; el.bossT.style.transform = `scaleX(${lk / 100})`; }
+  const low = camp.on && !!camp.s; // 목표 문구가 떠 있으면 그 아래에 둔다
+  if (cache.bossLow !== low) { cache.bossLow = low; el.boss.classList.toggle('low', low); }
 }
 
 // ───────────────────────── 아군 팀원: 플레이어를 따라다니며 교전한다. 작전 스크립트로 합류·이탈·지점 고수
@@ -2052,7 +2372,9 @@ function coopSendSnapshot() { // 방장 → 참가자: 웨이브 정보, 모든 
     if (e.dead || !e.nid) continue;
     const tp = e.tg && e.tg.net ? e.tg.pid : 0;
     const fl = (e.crouch > 0.5 ? 1 : 0) | (e.state === 'combat' && e.fleeT <= 0 ? 2 : 0) | (e.rollT > 0 ? 4 : 0) | (e.aimT > 0.15 ? 8 : 0) | (e.canSee ? 16 : 0) | ((tp & 3) << 5) | (e.hitN << 7);
-    en.push([e.nid, TYPE_KEYS.indexOf(e.T.key), Math.round(e.pos.x * 100), Math.round(e.pos.z * 100), Math.round(e.aimYaw * 100), fl]);
+    const q = [e.nid, TYPE_KEYS.indexOf(e.T.key), Math.round(e.pos.x * 100), Math.round(e.pos.z * 100), Math.round(e.aimYaw * 100), fl];
+    if (e.boss) q.push(Math.round(e.boss.hpK * 1000), bossFlags(e), Math.min(99, Math.round((e.boss.left || 0) * 10))); // 지휘관: 체력(천분율), 상태, 방탄이 풀려 있을 남은 시간(0.1초)
+    en.push(q);
   }
   sendSt(['s', ++coop.seq, [game.wave, game.toSpawn, game.score, coop.gen, isMis() ? misSync() : 0], pl, en, coop.shots]);
   coop.shots = [];
@@ -2317,6 +2639,7 @@ function coopToLobby(remote) {
   coop.started = false;
   for (const e of enemies) e.remove();
   enemies.length = 0;
+  barrageClear();
   clearSquad();
   coop.players.clear();
   coop.en.clear();
@@ -2440,12 +2763,13 @@ function coopOnState(link, m) {
     }
     if (e.dead) continue;
     pushSample(e.net.buf, { x: q[2] / 100, z: q[3] / 100, yaw: q[4] / 100, fl: q[5] });
+    if (q.length > 7) { e.net.hpk = q[6]; e.net.bfl = q[7]; e.net.left = q[8] | 0; }
     e.net.seen = m[1];
   }
   for (const sh of m[5]) { // 적의 사격: 예광탄·총성·탄착
     const e = coop.en.get(sh[0]);
     if (!e || e.dead) continue;
-    const ex = sh[1] / 10, ey = sh[2] / 10, ez = sh[3] / 10, ox = e.pos.x, oy = 1.48 - e.crouch * 0.37, oz = e.pos.z;
+    const ex = sh[1] / 10, ey = sh[2] / 10, ez = sh[3] / 10, ox = e.pos.x, oy = (1.48 - e.crouch * 0.37) * e.hs, oz = e.pos.z;
     _d.set(ex - ox, ey - oy, ez - oz);
     const len = _d.length();
     if (len > 0.5) {
@@ -2509,7 +2833,8 @@ function coopOnEvent(link, m) {
   else if (m.t === 'wave') {
     game.wave = m.n; game.toSpawn = m.c; coop.supplyT = 0;
     if (game.state === 'supply') setState('playing');
-    showMsg('WAVE ' + m.n, `적 ${m.c}명 접근 중`, 2.6);
+    const bw = Array.isArray(m.b) ? m.b.map((i) => TYPE_KEYS[i]).filter((k) => TYPES[k] && TYPES[k].boss) : [];
+    if (bw.length) bossBanner(bw); else showMsg('WAVE ' + m.n, `적 ${m.c}명 접근 중`, 2.6);
     SFX.play('wave', 0.6);
   } else if (m.t === 'clr') {
     if (!player.alive) coopRespawn();
@@ -2532,6 +2857,7 @@ function coopOnEvent(link, m) {
       el.hm.classList.add('kill');
     } else feed(`${COOP_NAMES[m.by] || '대원'} · ${e.T.label}`);
     if (m.dr) addPickup(m.dr === 1 ? 'ammo' : 'med', e.pos.x, e.pos.z);
+    if (e.T.boss) bossDown(e, false);
   } else if (m.t === 'hurt') hurtPlayer(+m.d || 0, { x: m.x, z: m.z });
   else if (m.t === 'gren') coopGhostGrenade(m);
   else if (m.t === 'over') coopShowOver('전원 쓰러짐', m);
@@ -2539,6 +2865,7 @@ function coopOnEvent(link, m) {
   else if (m.t === 'pvk') pvpOnKill(m);
   else if (m.t === 'pvo') pvpShowOver(m.sc);
   else if (m.t === 'pk') addPickup(m.k === 1 ? 'ammo' : 'med', +m.x || 0, +m.z || 0);
+  else if (m.t === 'bt') barrageApply(m);
   else if (!isMis()) return;
   else if (m.t === 'stg') misStage(m.k | 0, m);
   else if (m.t === 'stx') { if (camp.si === (m.k | 0)) { misStageOff(); if (m.sup) coop.supplyT = 1.6; } }
@@ -2849,6 +3176,7 @@ function beginStage(k) {
   fireEvents(on.start);
   for (const g of s.guards || []) { const c = snapFree({ x: g[0], z: g[1] }); enemies.push(new Enemy(c.x, c.z, g[2])); }
   if (s.type === 'sweep') camp.st.queue.push(...s.groups[0]);
+  if (s.type === 'boss') { camp.st.boss = null; camp.st.bossT = 1.6; camp.st.queue.push(...(s.groups || [])); bossBanner([s.boss]); } // 지휘관은 잠시 뒤 나타난다
   if (s.fuse) camp.boom = { t: s.fuse, sites: camp.boomSites || [], warn: false };
   if (s.type === 'reach') { camp.mark = { x: s.at.x, y: s.at.y || 0, z: s.at.z }; showMarks([{ x: s.at.x, y: s.at.y || 0, z: s.at.z, r: 0.7 }]); }
   else if (s.type === 'hold') { camp.mark = { x: s.at.x, y: s.at.y || 0, z: s.at.z }; showMarks([s.at.y ? { x: s.at.x, y: s.at.y, z: s.at.z, r: 0.7 } : { x: s.at.x, y: 0, z: s.at.z, r: Math.min(s.at.r, 9), h: 0.5 }]); }
@@ -2872,7 +3200,8 @@ function endStage() {
 function completeEpisode() {
   camp.s = null;
   const i = camp.idx, t = Math.round(camp.epT);
-  store.set('camp', Math.max(store.get('camp', 0), i + 1));
+  if (camp.ep.open) store.set('done_' + camp.ep.id, 1);
+  else store.set('camp', Math.max(store.get('camp', 0), i + 1));
   $('edTitle').textContent = `작전 ${i + 1} · ${camp.ep.title}`;
   $('edTime').textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
   $('edKills').textContent = game.kills;
@@ -2957,6 +3286,14 @@ function updateCampaign(dt) {
         if (st.planted >= st.sites.length) endStage();
       }
     } else st.plantT = 0;
+  } else if (s.type === 'boss') { // 지휘관 제거: 쓰러뜨리면 끝난다(남은 호위는 다음 단계로 넘어온다)
+    if (!st.boss) {
+      if ((st.bossT -= dt) <= 0) { st.boss = bossSpawn(s.boss) || spawnFor(s.boss, s); if (st.boss) camp.mark = st.boss.pos; else st.bossT = 0.5; }
+    } else if (st.boss.dead) {
+      camp.mark = null;
+      st.gap += dt;
+      if (st.gap > 2.8) endStage();
+    }
   }
 }
 // 작전 HUD: 목표 문구, 지점 표식, 분대 상태, 이름표, 무전
@@ -2990,6 +3327,7 @@ function updateCampHud(dt) {
       else if (s.type === 'carry') { const it = st.item, w = s.kind === 'pilot' ? '조종사' : '화물'; sub = (it.by < 0 ? `${w}에 다가가면 ${s.kind === 'pilot' ? '부축' : '집음'}` : it.by === coop.pid ? '목적지까지 · 달릴 수 없음' : `${pvpName(it.by)} 엄호`) + (s.items.length > 1 ? ` · ${it.n}/${s.items.length}` : ''); }
       else if (s.type === 'hold') sub = st.inside === false ? '구역 밖 · 돌아가야 시간이 줄어듭니다' : `${Math.max(0, Math.ceil(st.holdT))}초`;
       else if (s.type === 'plant') sub = `${st.planted}/${st.sites.length}`;
+      else if (s.type === 'boss') { const e = bossOf(); sub = e ? `체력 ${Math.ceil(e.boss.hpK * 100)}%` : ''; }
       setTxt('objS', sub);
     }
     for (let i = 0; i < 3; i++) { // 분대 상태
@@ -3071,13 +3409,13 @@ function openEpisodes() {
   const done = store.get('camp', 0), box = $('epList');
   box.textContent = '';
   EPISODES.forEach((ep, i) => {
-    const b = document.createElement('button'), locked = i > done;
-    b.className = 'card ep' + (locked ? ' locked' : '');
+    const b = document.createElement('button'), locked = !ep.open && i > done, fin = ep.open ? !!store.get('done_' + ep.id, 0) : i < done;
+    b.className = 'card ep' + (locked ? ' locked' : '') + (ep.open ? ' bossEp' : '');
     b.disabled = locked;
     b.id = 'ep' + i;
     const sl = document.createElement('span'), st = document.createElement('b'), sd = document.createElement('span'), sq = document.createElement('span');
     sl.className = 'sl'; st.className = 'st'; sd.className = 'sd'; sq.className = 'sq2';
-    sl.textContent = `작전 ${i + 1} · ${locked ? '잠김' : i < done ? '완료' : '진행 가능'}`;
+    sl.textContent = `작전 ${i + 1} · ${locked ? '잠김' : fin ? '완료' : ep.open ? '지휘관전' : '진행 가능'}`;
     st.textContent = ep.title;
     sd.textContent = `${MAPS[ep.map]} · ${ENVS[ep.env].label}`;
     sq.textContent = `팀: ${ep.squad}`;
@@ -3091,6 +3429,7 @@ function quitToMenu() {
   if (coop.on) coopEnd();
   for (const e of enemies) e.remove();
   enemies.length = 0;
+  barrageClear();
   clearSquad();
   camp.on = false;
   showMarks([]);
@@ -3134,6 +3473,7 @@ function misStage(k, d) {
     sites: sites ? sites.map((p) => ({ x: p.x, z: p.z, done: s.type === 'guard', t: 0, threat: 0 })) : null, item: null };
   if (s.type === 'carry') { const f = d && d.i ? { x: d.i[0], z: d.i[1] } : snapFree(s.items[0]); st.item = { x: f.x, z: f.z, by: -1, n: 0 }; }
   if (s.type === 'guard') st.planted = st.sites.length;
+  if (s.type === 'boss') { st.boss = null; st.bossT = 1.6; st.gap = 0; bossBanner([s.boss]); }
   if (s.type === 'reach' || s.type === 'hold') { camp.mark = { x: s.at.x, y: 0, z: s.at.z }; showMarks([s.type === 'hold' ? { x: s.at.x, y: 0, z: s.at.z, r: Math.min(s.at.r, 9), h: 0.5 } : { x: s.at.x, y: 0, z: s.at.z, r: 0.7 }]); }
   else camp.mark = null;
   mis.markKey = '';
@@ -3275,6 +3615,13 @@ function updateMission(dt) { // 방장만
         }
       }
     }
+  } else if (s.type === 'boss') { // 지휘관 제거: 쓰러뜨리면 끝난다(남은 호위는 다음 단계로 넘어온다)
+    if (!st.boss) {
+      if ((st.bossT -= dt) <= 0) { st.boss = bossSpawn(s.boss) || spawnFor(s.boss, s); if (!st.boss) st.bossT = 0.5; }
+    } else if (st.boss.dead) {
+      st.gap += dt;
+      if (st.gap > 2.8) misEnd();
+    }
   }
 }
 // 방장 → 참가자(상태에 실어 보낸다): [단계, 남은 초, 구역 안에 사람이 있나, 폭파까지(없으면 -1), 대기 중인 적, 지점들 [[완료, 진행×10, 위험]...], 물건 [든 사람, x, z, 옮긴 수]]
@@ -3300,6 +3647,7 @@ function misApply(a) { // 참가자
 function misLocal() { // 모든 폰: 내 화면의 표식, 설치 진행 막대, 옮기는 물건
   const s = camp.s, st = camp.st;
   if (!s || !st) return;
+  if (s.type === 'boss') { const e = bossOf(); camp.mark = e ? e.pos : null; } // 지휘관이 있는 곳
   if (st.sites) {
     let near = null;
     if (player.alive && player.pos.y < 1.2) for (const p of st.sites) if (!p.done && Math.hypot(p.x - player.pos.x, p.z - player.pos.z) < 1.9) near = p;
@@ -3401,15 +3749,22 @@ function updatePickups(dt) {
 
 // ───────────────────────── 웨이브
 function startWave(n) {
-  const np = nPlayers();
+  const np = nPlayers(), bw = bossWave(n);
   game.wave = n;
-  game.toSpawn = Math.min(Math.round((4 + (n - 1) * 2) * (1 + 0.5 * (np - 1))), 18 + 6 * (np - 1)); // 사람이 늘면 적도 는다
+  if (bw) { // 5웨이브마다 지휘관: 지휘관이 먼저 나오고 호위가 뒤따른다. 체력 66% · 33%에서 증원이 더 온다
+    const esc = Math.round(Math.min(3 + bossTier() * 2, 7) * (1 + 0.5 * (np - 1)));
+    game.queue = [...bw];
+    for (let i = 0; i < esc; i++) game.queue.push(pickOf(bossTier() > 0 ? ['rifle', 'rusher', 'rifle', 'heavy'] : ['rifle', 'rusher']));
+    game.toSpawn = game.queue.length;
+  } else {
+    game.toSpawn = Math.min(Math.round((4 + (n - 1) * 2) * (1 + 0.5 * (np - 1))), 18 + 6 * (np - 1)); // 사람이 늘면 적도 는다
+    game.queue = n === 2 ? ['rusher'] : n === 3 ? ['heavy'] : n === 4 ? ['sniper'] : [];
+  }
   game.spawnT = 0.5;
-  game.queue = n === 2 ? ['rusher'] : n === 3 ? ['heavy'] : n === 4 ? ['sniper'] : [];
   if (coop.on && game.state === 'supply') setState('playing'); // 보급을 고르지 못한 채 다음 웨이브가 시작됨
-  showMsg('WAVE ' + n, `적 ${game.toSpawn}명 접근 중`, 2.6);
+  if (bw) bossBanner(bw); else showMsg('WAVE ' + n, `적 ${game.toSpawn}명 접근 중`, 2.6);
   SFX.play('wave', 0.6);
-  if (coop.host) sendEv({ t: 'wave', n, c: game.toSpawn });
+  if (coop.host) sendEv({ t: 'wave', n, c: game.toSpawn, b: bw ? bw.map((k) => TYPE_KEYS.indexOf(k)) : 0 });
 }
 function updateWaves(dt) {
   if (game.supplyT > 0) { // 구역 확보 알림을 잠깐 보여 준 뒤 보급 선택
@@ -3430,7 +3785,8 @@ function updateWaves(dt) {
     }
   }
   if (game.toSpawn === 0 && aliveCount === 0 && game.wave > 0) {
-    const bonus = 250 * game.wave;
+    if (game.time - bossDownAt < 2.4) return; // 지휘관 제거 알림이 지나간 뒤에 웨이브를 마친다
+    const bw = bossWave(game.wave), bonus = 250 * game.wave * (bw ? 2 : 1); // 지휘관을 잡은 웨이브는 보너스 두 배
     game.score += bonus;
     giveAmmo();
     gren.n = Math.min(4 + prog.lv.gren, gren.n + 1);
@@ -3447,6 +3803,7 @@ function resetGame() {
   for (const g of gren.list) scene.remove(g.mesh);
   gren.list.length = 0;
   gren.n = 2;
+  barrageClear();
   resetProg();
   game.supplyT = 0;
   scorch.clear();
@@ -3456,6 +3813,7 @@ function resetGame() {
   decals.clear();
   tokens = 0;
   aliveCount = 0;
+  bossDownAt = -99;
   player.pos.set(START.x, 0, START.z);
   player.vel.set(0, 0, 0);
   player.yaw = 0; player.pitch = 0; player.hp = 100; player.alive = true; player.crouch = false; player.crouchT = 0; player.lastHurt = -99; player.grounded = true; player.col.grounded = true;
@@ -3845,7 +4203,7 @@ window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 
 // ───────────────────────── 루프
 let last = performance.now(), ema = 16, dynT = 0, menuT = 0, slowN = 0;
-const dbg = { noDyn: false };
+const dbg = { noDyn: false, freeze: false }; // freeze: 자동 검증에서 장면을 멈춰 두고 화면을 찍을 때
 function update(dt) {
   game.time += dt;
   if (player.alive) { scanTarget(dt); handleLook(dt); updatePlayer(dt); updateWeapon(dt); }
@@ -3863,11 +4221,13 @@ function update(dt) {
   if (player.alive) updatePickups(dt);
   if (coop.on) coopUpdate(dt);
   updateGrenades(dt);
+  updateBarrage(dt);
   dust.update(dt); sparks.update(dt); tracers.update(dt); shells.update(dt);
   flashLight.intensity = flashLight.intensity < 0.05 ? 0 : flashLight.intensity * Math.exp(-dt * 55);
   placeCamera(dt);
   updateViewmodel(dt);
   updateHud(dt);
+  updateBossHud();
   updateCampHud(dt);
 }
 function render() {
@@ -3888,7 +4248,7 @@ function frame(now) {
   const raw = now - last;
   last = now;
   const dt = clamp(raw / 1000, 0.001, 0.05);
-  if (live()) update(dt);
+  if (live() && !dbg.freeze) update(dt);
   if (rain.on) updateRain(dt);
   else if (game.state === 'menu' || game.state === 'eps' || game.state === 'coop') {
     menuT += dt;
@@ -3928,4 +4288,4 @@ setState('menu');
 requestAnimationFrame(frame);
 
 // 자동 검증용 훅
-window.__yz = { step: (n, dt) => { for (let i = 0; i < n && live(); i++) update(dt); }, coop, NET, isPvp, isTeam, isMis, teamOf, mate, teamKills, MISSIONS, mis, updateMission, misEnd, envOf: () => envName, shareUrl, pvpTable, coopToLobby, pauseGame, resumeGame, netFailText, addPickup, findPath, cellNear, humans, coopHost, coopJoin, coopHostStart, coopEnd, lob, RemotePlayer, chestY, camp, allies, overwatch, EPISODES, SQUAD, startEpisode, squadJoin, squadLeave, squadHold, squadFollow, setOverwatch, openEpisodes, quitToMenu, radioQ, store, loadMap, applyEnv, ENVS, WORLD, B, START, rayWorld, losClear, blockedAt, findPath, prog, openSupply, pickSupply, applySupply, SFX, WH, dust, sparks, TYPES, gren, throwGrenade, explode, ORDER, MOCAP, aa, VM, scene, colliders, toggleRot, game, player, enemies, input, vm, W, opt, dbg, renderer, camera, pickups, spawnEnemy, startGame, hurtPlayer, switchWeapon, startReload, applyQuality, NAV };
+window.__yz = { step: (n, dt) => { for (let i = 0; i < n && live(); i++) update(dt); }, bossOf, bossArmor, bossWave, bossTier, bossBarrage, bossSpawn, barrage, barrageApply, barrageClear, startWave, rayEnemy, updateWaves, coop, NET, isPvp, isTeam, isMis, teamOf, mate, teamKills, MISSIONS, mis, updateMission, misEnd, envOf: () => envName, shareUrl, pvpTable, coopToLobby, pauseGame, resumeGame, netFailText, addPickup, findPath, cellNear, humans, coopHost, coopJoin, coopHostStart, coopEnd, lob, RemotePlayer, chestY, camp, allies, overwatch, EPISODES, SQUAD, startEpisode, squadJoin, squadLeave, squadHold, squadFollow, setOverwatch, openEpisodes, quitToMenu, radioQ, store, loadMap, applyEnv, ENVS, WORLD, B, START, rayWorld, losClear, blockedAt, findPath, prog, openSupply, pickSupply, applySupply, SFX, WH, dust, sparks, TYPES, gren, throwGrenade, explode, ORDER, MOCAP, aa, VM, scene, colliders, toggleRot, game, player, enemies, input, vm, W, opt, dbg, renderer, camera, pickups, spawnEnemy, startGame, hurtPlayer, switchWeapon, startReload, applyQuality, NAV };

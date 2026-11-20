@@ -1,5 +1,7 @@
 // 작전(에피소드) 데이터. 엔진은 main.js의 "작전 진행" 부분.
 // 단계 type: sweep(적 무리를 차례로 소탕) / reach(지점 도달) / hold(구역에서 버티기) / plant(여러 지점에 폭약 설치)
+//   boss(v0.10): 지휘관(boss: 'jugg' 철갑 / 'bomb' 화약고)을 쓰러뜨리면 끝난다. groups [종류...]는 함께 오는 호위(그 뒤의 증원은 지휘관이 체력 66% · 33%에서 부른다). 지휘관의 성능은 main.js의 TYPES
+// 작전의 open: true 는 앞 작전을 마치지 않아도 처음부터 열려 있다(완료 여부도 따로 기록한다)
 // 이벤트: { say: [말하는 이, 문장] } { join: 팀원, at } { leave: 팀원, to } { hold: 팀원, at } { follow: 팀원 } { overwatch: 지점 | 'tower' | false }
 // on.start / on.end: 단계 시작·끝, on.t: [[초, [이벤트...]]...], on.planted: { 설치 개수: [이벤트...] }
 
@@ -77,6 +79,18 @@ export const EPISODES = [
           end: [{ follow: 'seo' }, { say: ['seo', '출입구 이상 무.'] }, { say: ['본부', '야드 탈환 완료. 전원 수고했다.'] }] } },
     ],
   },
+  {
+    id: 'ep5', title: '지휘관 사냥', map: 'dock', env: 'dawn', level: 5, loadout: ['ar', 'shotgun', 'dmr', 'pistol'], squad: '한 중사', open: true,
+    brief: '새벽 부두에 적 지휘관 둘이 차례로 나타난다. 정면 사격은 거의 통하지 않는다. 틈을 읽어야 한다.',
+    stages: [
+      { type: 'boss', boss: 'jugg', text: '중장갑 지휘관 철갑 제거', groups: ['rifle', 'rusher', 'rifle'], supply: true,
+        on: { start: [{ join: 'han', at: { x: -57, z: 23 } }, { say: ['han', '철갑이다. 정면은 방탄판이라 총알이 튕긴다.'] }, { say: ['han', '탄창을 갈 때 주저앉는다. 그때 쏴라. 수류탄을 맞으면 비틀거린다.'] }],
+          end: [{ say: ['본부', '철갑 제거 확인. 보급을 받아라. 하나 더 온다.'] }] } },
+      { type: 'boss', boss: 'bomb', text: '포격 지휘관 화약고 제거', groups: ['rifle', 'rifle', 'rusher'],
+        on: { start: [{ say: ['본부', '포격 지휘관 화약고다. 바닥에 붉은 원이 뜨면 바로 벗어나라.'] }, { say: ['han', '무전을 칠 때는 방탄이 풀린다. 그때가 틈이다.'] }],
+          end: [{ say: ['han', '지휘관 둘 다 잡았다. 수고했다.'] }, { say: ['본부', '부두의 적 지휘부가 무너졌다. 전원 복귀하라.'] }] } },
+    ],
+  },
 ];
 
 // 협동 임무(네트워크 전용, 1~4명). 엔진은 main.js의 "협동 임무" 부분. 방장의 폰이 진행을 계산한다.
@@ -86,6 +100,7 @@ export const EPISODES = [
 //   guard  앞 단계에서 설치한 폭약을 time초 동안 지킨다. 적이 폭약 곁(3.2m)에 붙어 있고 6m 안에 아무도 없는 시간이 8초 쌓이면 해제된다. 해제된 폭약은 다시 설치해야 시간이 줄어든다
 //   carry  items의 물건(kind: crate 화물 / pilot 조종사)에 차례로 다가가 집고 to까지 옮긴다. 옮기는 사람은 달릴 수 없고 느려진다. 쓰러지면 그 자리에 놓인다
 //   hold   구역에 한 명이라도 있으면 시간이 줄어든다
+//   boss   (v0.10) 지휘관(boss: 'jugg' 철갑 / 'bomb' 화약고)을 쓰러뜨리면 끝난다. 지휘관의 체력은 사람 수에 따라 는다
 // 공통: guards [[x, z, 종류]...] 시작할 때 서 있는 적, groups [종류...] 시작할 때 몰려오는 적, trickle 계속 채워지는 적, from 적이 나오는 곳, supply 끝나면 보급 선택, say 무전
 export const MISSIONS = [
   {
@@ -127,6 +142,16 @@ export const MISSIONS = [
         say: { start: '부축하는 사람은 뛰지 못한다. 북쪽 하역장까지 데려가라.', end: '하역장 도착. 차량이 가는 중이다. 버텨라.' } },
       { type: 'hold', text: '차량이 올 때까지 하역장 사수', at: { x: 0, z: -22, r: 11 }, time: 40, keep: 5, every: 1.9, types: ['rifle', 'rusher', 'heavy', 'rifle', 'rusher'],
         say: { end: '차량 도착. 조종사 인계 완료. 잘했다.' } },
+    ],
+  },
+  {
+    id: 'm4', title: '지휘부 타격', map: 'depot', env: 'dawn', level: 5, loadout: ['ar', 'shotgun', 'dmr', 'pistol'],
+    brief: '새벽의 차량기지에 적 지휘관 둘이 차례로 나타난다. 한 사람이 시선을 끌 때 다른 사람이 등 뒤를 노린다. 붉은 원이 뜨면 흩어진다.',
+    stages: [
+      { type: 'boss', boss: 'jugg', text: '중장갑 지휘관 철갑 제거', groups: ['rifle', 'rusher', 'rifle'], supply: true,
+        say: { start: '철갑이 온다. 정면은 방탄이다. 한 명이 시선을 끌고 다른 사람이 등 뒤를 쳐라. 탄창을 갈 때도 틈이다.', end: '철갑 제거 확인. 보급을 받아라. 포격 지휘관이 오고 있다.' } },
+      { type: 'boss', boss: 'bomb', text: '포격 지휘관 화약고 제거', groups: ['rifle', 'rifle', 'rusher'],
+        say: { start: '화약고다. 붉은 원이 뜨면 흩어져라. 뭉쳐 있으면 함께 당한다. 무전을 칠 때 방탄이 풀린다.', end: '지휘관 둘 다 제거했다. 지휘부가 무너졌다. 잘했다.' } },
     ],
   },
 ];
