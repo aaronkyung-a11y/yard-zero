@@ -16,7 +16,7 @@ const mk = async (tag) => {
   page.on('pageerror', (e) => errors.push(`[${tag} pageerror] ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|ERR_FAILED/.test(m.text())) errors.push(`[${tag} console] ${m.text().slice(0, 200)}`); });
   await page.route('**/*', (r) => { const u = r.request().url(); return u.startsWith('file:') || u.startsWith('http://127.0.0.1:9000') ? r.continue() : r.abort(); });
-  await page.goto('file:///home/claude/yard-zero/dist/index.html');
+  await page.goto('file:///home/claude/yard-zero/dist/index.html', { timeout: 120000 }); // 세 번째 페이지는 앞의 둘이 메뉴 배경을 그리는 동안 열려서 30초를 넘기곤 한다(v0.10 31초, v0.11 33초로 측정)
   await page.waitForFunction(() => window.__yz && window.__yz.MOCAP.ready, null, { timeout: 120000 });
   return page;
 };

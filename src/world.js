@@ -59,6 +59,7 @@ export function buildWorld(scene, M, mapId = 'yard') {
   WORLD.meshes.length = 0;
   WORLD.id = mapId;
   WORLD.points = {};
+  WORLD.lamps = []; // 등의 자리 [{x, y, z, night}] (v0.11: 가까운 등을 진짜 빛으로 켜고 빛 번짐을 얹는 데 쓴다)
   colliders.length = 0;
   const r = mulberry32(mapId === 'yard' ? 4242 : mapId === 'dock' ? 7310 : 9157);
   const L = { concrete: [], container: [], steel: [], wood: [], glass: [], paint: [], puddle: [], marks: [], ao: [], floor: [], lamp: [], glow: [], glowN: [], water: [] };
@@ -123,6 +124,7 @@ export function buildWorld(scene, M, mapId = 'yard') {
     const d = new THREE.BoxGeometry(0.5, 0.06, 0.5);
     d.translate(x, y, z);
     L.lamp.push(d);
+    WORLD.lamps.push({ x, y, z, night, h: y - baseY });
     if (pool) {
       const g = new THREE.PlaneGeometry(pool, pool);
       g.rotateX(-Math.PI / 2);
@@ -455,6 +457,7 @@ export function buildWorld(scene, M, mapId = 'yard') {
         d.rotateX(Math.PI / 2);
         d.translate(x, H - 1.335, z);
         L.lamp.push(d);
+        WORLD.lamps.push({ x, y: H - 1.335, z, night: false, h: H - 1.335 });
         const g = new THREE.PlaneGeometry(8, 8);
         g.rotateX(-Math.PI / 2);
         g.translate(x, 0.03, z);

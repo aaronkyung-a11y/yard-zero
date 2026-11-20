@@ -12,7 +12,7 @@ import { buildViewmodel } from './viewmodel.js';
 import { EPISODES, SQUAD, MISSIONS } from './episodes.js';
 import { NET, host as netHost, join as netJoin, sendEv, sendSt, close as netClose } from './net.js';
 
-const VERSION = 'v0.10';
+const VERSION = 'v0.11';
 const UP = new THREE.Vector3(0, 1, 0);
 const _f = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _d = new THREE.Vector3(), _v = new THREE.Vector3(), _w = new THREE.Vector3(), _m = new THREE.Vector3(), _mz = new THREE.Vector3();
 const ZAXIS = new THREE.Vector3(0, 0, 1);
@@ -23,6 +23,8 @@ const store = {
   set(k, v) { try { localStorage.setItem('yz.' + k, JSON.stringify(v)); } catch (e) { /* 저장소 없음 */ } },
 };
 const opt = { sens: store.get('sens', 1), sound: store.get('sound', true), quality: store.get('quality', 'high'), rot: store.get('rot', false), autoFire: false };
+// 그래픽 품질. pr: 화소 배율 상한, shadow: 그림자 해상도(0이면 끔), fx: 광원·질감 단계(0 총에 색 질감만 / 1 총의 긁힌 윤기 질감까지 / 2 가까운 등을 진짜 빛으로 켜고 총에 요철 질감까지), bloom: 빛 번짐
+const QUAL = { high: { pr: 2, shadow: 2048, fx: 2, bloom: true, label: '높음' }, mid: { pr: 1.5, shadow: 1024, fx: 1, bloom: false, label: '중간' }, low: { pr: 1, shadow: 0, fx: 0, bloom: false, label: '낮음' } };
 const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 opt.autoFire = store.get('auto', isTouchDevice);
 function setInputMode(touch) {
@@ -91,13 +93,13 @@ function fitShadow() {
 }
 // el: 고도(도), az: 방위(도), sky: [탁도, 레일리, 미 계수, 미 방향성]
 const ENVS = {
-  day: { label: '낮', el: 24, az: 125, sun: 0xffe9c9, sunI: 9, hemi: [0xc4d6ff, 0x4d463c, 0.5], fog: [0xb9c1c8, 0.0036], exp: 0.54, sky: [7, 1.6, 0.004, 0.82],
+  day: { label: '낮', glare: 0.7, bloom: [0.3, 0.9], el: 24, az: 125, sun: 0xffe9c9, sunI: 9, hemi: [0xc4d6ff, 0x4d463c, 0.5], fog: [0xb9c1c8, 0.0036], exp: 0.54, sky: [7, 1.6, 0.004, 0.82],
     cloud: { shade: [0.6, 0.65, 0.72], lit: [1.25, 1.12, 0.95], glow: [1.0, 0.86, 0.62], cover: 0.5, alpha: 0.85 }, glowN: 0, glow: 0.2 },
-  dawn: { label: '새벽', el: 7, az: 100, sun: 0xffb27c, sunI: 7, hemi: [0xaab6dc, 0x4a3d36, 0.55], fog: [0xd2b3a0, 0.0048], exp: 0.62, sky: [9, 2.6, 0.006, 0.86],
+  dawn: { label: '새벽', glare: 0.85, bloom: [0.42, 0.87], el: 7, az: 100, sun: 0xffb27c, sunI: 7, hemi: [0xaab6dc, 0x4a3d36, 0.55], fog: [0xd2b3a0, 0.0048], exp: 0.62, sky: [9, 2.6, 0.006, 0.86],
     cloud: { shade: [0.5, 0.46, 0.56], lit: [1.5, 0.95, 0.68], glow: [1.0, 0.6, 0.36], cover: 0.46, alpha: 0.85 }, glowN: 0.16, glow: 0.3 },
-  overcast: { label: '흐림·비', el: 55, az: 150, sun: 0xdde4ec, sunI: 2.6, hemi: [0xdfe6f2, 0x5a554e, 1.6], fog: [0xa3aab0, 0.0064], exp: 0.6, sky: [20, 0.6, 0.012, 0.7],
+  overcast: { label: '흐림·비', bloom: [0.25, 0.9], el: 55, az: 150, sun: 0xdde4ec, sunI: 2.6, hemi: [0xdfe6f2, 0x5a554e, 1.6], fog: [0xa3aab0, 0.0064], exp: 0.6, sky: [20, 0.6, 0.012, 0.7],
     cloud: { shade: [0.5, 0.53, 0.57], lit: [0.74, 0.77, 0.8], glow: [0, 0, 0], cover: 0.08, alpha: 0.97 }, glowN: 0.1, glow: 0.3, rain: true },
-  night: { label: '밤', el: 42, az: 215, sun: 0x9db6ff, sunI: 1.7, hemi: [0x6681bd, 0x222834, 1.15], fog: [0x0b1320, 0.0064], exp: 0.9, sky: [4, 0.6, 0.002, 0.8], night: true,
+  night: { label: '밤', bloom: [1.0, 0.9], el: 42, az: 215, sun: 0x9db6ff, sunI: 1.7, hemi: [0x6681bd, 0x222834, 1.15], fog: [0x0b1320, 0.0064], exp: 0.9, sky: [4, 0.6, 0.002, 0.8], night: true,
     cloud: { shade: [0.03, 0.04, 0.065], lit: [0.11, 0.14, 0.21], glow: [0.5, 0.6, 0.9], cover: 0.5, alpha: 0.8 }, glowN: 0.75, glow: 0.6, stars: true },
 };
 let envName = '';
@@ -118,7 +120,15 @@ function addClouds(tex) {
         vec3 col = mix(lit * 0.7, lit, smoothstep(0.55, 0.9, n));
         float glow = pow(sd, 28.0) * 0.2 + pow(sd, 420.0) * 1.5;
         float a = dens * uAlpha;
-        gl_FragColor = vec4(col * a + cGlow * glow * (1.0 - a * 0.6), a);
+        // v0.11: 해 둘레의 빛을 그냥 더하면 넓은 자리가 한꺼번에 하얗게 타서 그 가장자리에 테가 보인다. 뒤의 하늘을 그만큼 덜어 내고 얹어(스크린 합성) 가운데로 갈수록 서서히 하얘지게 한다
+        vec3 gcol = cGlow * glow * (1.0 - a * 0.6);
+        #ifdef TONE_MAPPING
+        vec3 gd = toneMapping(gcol);
+        #else
+        vec3 gd = gcol;
+        #endif
+        float ga = clamp(pow(max(gd.r, max(gd.g, gd.b)), 0.4545), 0.0, 1.0);
+        gl_FragColor = vec4(col * a + gcol, a + ga * (1.0 - a));
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,
@@ -133,8 +143,34 @@ const vmSun = new THREE.DirectionalLight(0xffe9c9, SUN_I);
 vmScene.add(vmSun, vmSun.target);
 const vmHemi = new THREE.HemisphereLight(0xc4d6ff, 0x4d463c, 0.5);
 vmScene.add(vmHemi);
+// v0.11: 총을 왼쪽 위 뒤에서 비추는 보조광. 카메라에 붙어 있어 그늘에서도 총의 형태가 읽힌다(하늘빛의 색과 세기를 따른다)
+const vmFill = new THREE.DirectionalLight(0xc4d6ff, 1.5);
+vmFill.position.set(-0.55, 0.7, 0.45);
+vmFill.target.position.set(0.08, -0.1, -0.5);
+vmCam.add(vmFill, vmFill.target);
+// 번쩍이는 빛 하나를 내 총구 화염, 적·팀원의 총구 화염(쉬는 틈에), 폭발의 섬광과 잔광이 나눠 쓴다. 빛을 따로 두면 모든 면의 계산이 그만큼 늘어난다
 const flashLight = new THREE.PointLight(0xffb060, 0, 16, 2);
+flashLight.userData.glow = false; // 폭발: 섬광이 꺼진 뒤에도 0.5초쯤 잔광으로 남는다
 scene.add(flashLight);
+// v0.11 광원 효과. 장면에 넣는 등의 수는 품질과 환경에 따라 맵을 올릴 때 정한다(수가 바뀌면 셰이더를 다시 짓기 때문에 게임 중에는 바꾸지 않는다)
+// 가까운 등을 진짜 빛으로 켠다("높음"만. 밤에는 셋, 그 밖에는 실내등 둘까지)
+const lampL = [0, 1, 2].map(() => ({ light: new THREE.PointLight(0xffd9a0, 0, 34, 1.7), lamp: null, next: null, keep: false, k: 0 }));
+// 밤: 총에 단 전등 (모든 품질. 보이는 범위가 품질에 따라 달라지면 안 된다). 거리에 따른 약해짐을 실제보다 완만하게 해서 코앞의 벽이 하얗게 타지 않으면서 30m 앞까지 닿게 한다
+const TORCH_I = 9;
+const torch = new THREE.SpotLight(0xdfe7ff, 0, 46, rad(23), 0.5, 0.35);
+function applyLights() {
+  const q = QUAL[opt.quality] || QUAL.high, night = !!(ENVS[envName] && ENVS[envName].night);
+  // 이 맵·환경에서 켜질 수 있는 등의 수만큼만 넣는다(밤이 아니면 실내등만. 하나도 없으면 넣지 않는다)
+  const nLamp = q.fx > 1 ? Math.min(night ? 3 : 2, (WORLD.lamps || []).filter((l) => night || !l.night).length) : 0;
+  const want = [[torch, night], [torch.target, night], ...lampL.map((s, i) => [s.light, i < nLamp])];
+  for (const [o, on] of want) { if (on && !o.parent) scene.add(o); else if (!on && o.parent) scene.remove(o); }
+  for (const s of lampL) if (!s.light.parent) { s.lamp = s.next = null; s.keep = false; s.k = 0; s.light.intensity = 0; }
+  torch.intensity = night ? TORCH_I : 0;
+  // 가까운 등이 진짜 빛으로 켜지는 품질에서는 바닥에 깔아 둔 빛웅덩이 그림을 줄인다(둘이 겹쳐 등 밑이 하얗게 타지 않게)
+  const E = ENVS[envName] || ENVS.day;
+  M.glowN.opacity = E.glowN * (nLamp ? 0.5 : 1);
+  M.glow.opacity = E.glow * (nLamp ? 0.6 : 1);
+}
 
 // ───────────────────────── 월드
 const T = makeTextures();
@@ -156,6 +192,27 @@ const M = {
   puddle: new THREE.MeshStandardMaterial({ color: 0x090a0b, roughness: 0.03, alphaMap: T.puddle, transparent: true, opacity: 0.82, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }),
 };
 addClouds(T.cloud);
+// 등 둘레의 부드러운 빛 번짐. night: 밤 환경에서만 켜지는 야외등, 나머지는 실내등
+const haloMatN = new THREE.PointsMaterial({ map: T.soft, color: 0xffd9a0, size: 6.5, sizeAttenuation: true, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
+const haloMatD = new THREE.PointsMaterial({ map: T.soft, color: 0xffe2b8, size: 3.2, sizeAttenuation: true, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
+let lampHalo = null;
+function buildHalos() {
+  if (lampHalo) for (const p of lampHalo) { scene.remove(p); p.geometry.dispose(); }
+  const mk = (list, mat) => {
+    const pos = new Float32Array(list.length * 3);
+    list.forEach((l, i) => { pos[i * 3] = l.x; pos[i * 3 + 1] = l.y - 0.3; pos[i * 3 + 2] = l.z; });
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const p = new THREE.Points(g, mat);
+    p.frustumCulled = false;
+    p.renderOrder = 6;
+    scene.add(p);
+    return p;
+  };
+  const lamps = WORLD.lamps || [];
+  lampHalo = [mk(lamps.filter((l) => l.night), haloMatN), mk(lamps.filter((l) => !l.night), haloMatD)];
+  for (const s of lampL) { s.lamp = s.next = null; s.keep = false; s.k = 0; s.light.intensity = 0; }
+}
 // 별 (밤에만)
 const stars = (() => {
   const n = 420, pos = new Float32Array(n * 3);
@@ -228,6 +285,15 @@ function applyEnv(name) {
   }
   M.glowN.opacity = E.glowN;
   M.glow.opacity = E.glow;
+  // v0.11 비: 젖은 바닥과 벽. 거칠기를 낮춰 하늘빛과 불빛이 비치게 하고 색을 조금 가라앉힌다
+  const wet = !!E.rain;
+  M.asphalt.roughness = wet ? 0.36 : 0.9; M.asphalt.color.setScalar(wet ? 0.52 : 1);
+  M.concrete.roughness = wet ? 0.58 : 0.95; M.concrete.color.setScalar(wet ? 0.8 : 1);
+  M.container.roughness = wet ? 0.32 : 0.55;
+  M.steel.roughness = wet ? 0.3 : 0.5;
+  M.wood.roughness = wet ? 0.6 : 0.85; M.wood.color.setScalar(wet ? 0.8 : 1);
+  M.puddle.opacity = wet ? 0.96 : 0.82;
+  haloMatN.opacity = clamp(E.glowN * 0.8, 0, 0.6);
   stars.visible = !!E.stars;
   rain.on = !!E.rain;
   rain.m.visible = rain.on;
@@ -235,9 +301,11 @@ function applyEnv(name) {
 }
 // 맵과 환경을 바꾼다. 맵이 같으면 월드는 다시 만들지 않는다
 function loadMap(id, env) {
-  if (WORLD.id !== id) buildWorld(scene, M, id);
+  if (WORLD.id !== id) { buildWorld(scene, M, id); buildHalos(); }
   if ((env || 'day') !== envName) applyEnv(env || 'day'); // 환경이 같으면 반사맵을 다시 굽지 않는다
   for (const m of WORLD.meshes) if (m.userData.list === 'glowN') m.visible = ENVS[envName].glowN > 0.01;
+  if (lampHalo) lampHalo[0].visible = ENVS[envName].glowN > 0.05;
+  applyLights();
   fitShadow();
 }
 loadMap('yard', 'day');
@@ -306,7 +374,7 @@ const assist = { t: 0 };
 // ───────────────────────── HUD
 const el = {};
 for (const id of ['coop', 'hudVer', 'obj', 'objT', 'objS', 'squad', 'sqOw', 'radio', 'radioN', 'radioT', 'mk', 'mkD', 'tags', 'eps', 'epdone', 'rl', 'rlFill', 'hint', 'supply', 'supplySub', 'sup0', 'sup1', 'sup2', 'hud', 'touch', 'bPause', 'menu', 'pause', 'over', 'hpFill', 'hpNum', 'waveTxt', 'enemyTxt', 'scoreTxt', 'feed', 'msg', 'msgT', 'msgS', 'ch', 'hm', 'dmgs', 'rl', 'rlFill', 'hint',
-  'joy', 'knob', 'bAds', 'bCrouch', 'ammoN', 'ammoR', 'wName', 'hurt', 'bestTxt', 'sensTxt', 'sensTxt0', 'scope', 'grenN', 'boss', 'bossN', 'bossS', 'bossFill', 'bossT', 'shellWarn']) el[id] = $(id);
+  'joy', 'knob', 'bAds', 'bCrouch', 'ammoN', 'ammoR', 'wName', 'hurt', 'bestTxt', 'sensTxt', 'sensTxt0', 'scope', 'grenN', 'boss', 'bossN', 'bossS', 'bossFill', 'bossT', 'shellWarn', 'glare']) el[id] = $(id);
 const cache = {};
 const hudS = { hm: 0, hurt: 0, msg: 0 };
 const dmgInd = [0, 1, 2, 3].map((i) => ({ x: 0, z: 0, t: 0, el: el.dmgs.children[i] }));
@@ -529,7 +597,9 @@ function shoot(w) {
   vm.flashT = 0.045;
   flashLight.position.copy(o).addScaledVector(_f, 1.2);
   flashLight.distance = 16;
-  flashLight.intensity = w.pellets ? 90 : 60;
+  flashLight.userData.glow = false;
+  // 밤에는 화면이 밝게 잡혀 있어서 같은 세기면 코앞의 벽이 하얗게 탄다. 환경의 밝기에 맞춰 줄인다
+  flashLight.intensity = (w.pellets ? 90 : 60) * (ENVS[envName].night ? 0.4 : 0.54 / renderer.toneMappingExposure);
   VM.light.intensity = 2.5;
   if (w.pump) vm.pumpT = 0.6;
   else ejectShell();
@@ -730,7 +800,11 @@ function updateViewmodel(dt) {
       const mk = k < 0.18 ? 0 : k < 0.38 ? (k - 0.18) / 0.2 : k < 0.5 ? 1 : k < 0.7 ? 1 - (k - 0.5) / 0.2 : 0;
       g.mag.position.y = -0.2 * smooth(mk);
     }
-  } else if (g.mag) g.mag.position.y = 0;
+    if (g.charge) g.charge.position.z = k > 0.8 && k < 0.95 ? 0.032 * Math.sin((Math.PI * (k - 0.8)) / 0.15) : 0; // 장전 손잡이를 당겼다 놓는다
+  } else {
+    if (g.mag) g.mag.position.y = 0;
+    if (g.charge) g.charge.position.z = 0;
+  }
   vm.rlPose = damp(vm.rlPose, w.shell && vm.reloadT > 0 ? 1 : 0, 10, dt);
   if (vm.rlPose > 0.01) {
     const bump = vm.reloadT > 0 ? Math.sin(Math.PI * (1 - vm.reloadT / vm.reloadDur)) * 0.012 : 0;
@@ -748,7 +822,7 @@ function updateViewmodel(dt) {
   }
   if (!player.alive) { dipY -= Math.min(0.5, game.dieT * 0.5); pitchX -= Math.min(0.8, game.dieT); }
   vm.slideK = Math.max(0, vm.slideK - dt * 16);
-  if (g.slide) g.slide.position.z = vm.slideK * 0.028;
+  if (g.slide) g.slide.position.z = Math.max(vm.slideK, w.ammo === 0 && !(vm.reloadT > 0 && vm.reloadT < vm.reloadDur * 0.2) ? 1 : 0) * 0.028; // 다 쏜 권총은 슬라이드가 뒤에 멈춰 있다가 재장전 끝에 풀린다
   const s = vm.sprintT * (1 - a), br = Math.sin(game.time * 1.4) * 0.0012 * (1 - a * 0.6);
   VM.rig.position.set(
     lerp(w.hip.x + vmShiftX, w.ads.x, a) + bx + vm.swayX - 0.03 * s,
@@ -767,8 +841,15 @@ function updateViewmodel(dt) {
     vm.shadeTarget = rayWorld(p.x, p.y, p.z, sunDir.x, sunDir.y, sunDir.z, 80, false) ? 0.06 : 1;
   }
   vm.shade = damp(vm.shade, vm.shadeTarget ?? 1, 8, dt);
-  vmSun.intensity = SUN_I * vm.shade;
+  // 해를 마주 보면 총의 넓고 평평한 윗면이 해와 그 둘레의 밝은 하늘을 스치는 각도로 되비춰 총 전체가 은빛으로 뜬다(각진 모델이라 면 전체가 한꺼번에 밝아진다).
+  // 마주 볼수록 총에 닿는 해의 빛과 하늘 반사를 30%까지 줄여 역광 속의 어두운 총으로 보이게 한다
+  camera.getWorldDirection(_f);
+  const facing = 1 - 0.7 * smooth(clamp((_f.dot(sunDir) - 0.2) / 0.7, 0, 1));
+  vmSun.intensity = SUN_I * vm.shade * facing;
+  vmScene.environmentIntensity = facing;
   vmHemi.intensity = hemi.intensity * (ENVS[envName] && ENVS[envName].night ? 1.5 : 1);
+  vmFill.color.copy(vmHemi.color);
+  vmFill.intensity = 1.2 * (hemi.intensity + SUN_I * 0.12);
 }
 
 // ───────────────────────── 플레이어
@@ -940,6 +1021,13 @@ function placeCamera(dt) {
   vmSun.position.copy(camera.position).addScaledVector(sunDir, 30);
   vmSun.target.position.copy(camera.position);
   vmSun.target.updateMatrixWorld();
+  if (torch.parent) { // 밤: 총에 단 전등이 보는 쪽을 비춘다
+    camera.getWorldDirection(_f);
+    torch.position.copy(camera.position).addScaledVector(_f, 0.3);
+    torch.position.y -= 0.1;
+    torch.target.position.copy(camera.position).addScaledVector(_f, 12);
+    torch.target.updateMatrixWorld();
+  }
   SFX.listener.x = camera.position.x; SFX.listener.y = camera.position.y; SFX.listener.z = camera.position.z;
   SFX.listener.rx = Math.cos(player.yaw); SFX.listener.rz = -Math.sin(player.yaw);
 }
@@ -1007,9 +1095,12 @@ function explode(x, y, z, ghost) {
   for (let i = 0; i < 16; i++) dust.emit(x + rr(-0.4, 0.4), y + 0.3, z + rr(-0.4, 0.4), rr(-2.5, 2.5), rr(1.5, 5), rr(-2.5, 2.5), rr(1.3, 2.6), rr(0.5, 1.0), 0.16, 0.15, 0.14, 0.55, -0.5, 1.7, 1.5);
   for (let i = 0; i < 22; i++) dust.emit(x, y + 0.1, z, rr(-9, 9), rr(2, 10), rr(-9, 9), rr(0.5, 1.1), rr(0.02, 0.045), 0.16, 0.15, 0.14, 1, 9.8, 0.4);
   if (y < 1.2) scorch.add(x, 0, z, 0, 1, 0, rr(2.4, 3.2));
-  flashLight.position.set(x, y + 0.7, z);
+  for (let i = 0; i < 8; i++) sparks.emit(x + rr(-0.6, 0.6), y + 0.5 + rr(0, 0.7), z + rr(-0.6, 0.6), rr(-1.6, 1.6), rr(1.5, 4.2), rr(-1.6, 1.6), rr(0.26, 0.5), rr(1.1, 2.1), 1, rr(0.4, 0.6), 0.12, 0.8, -1.5, 1.5, 2.2); // 불덩이
+  for (let i = 0; i < 7; i++) dust.emit(x + rr(-0.8, 0.8), y + 0.8 + rr(0, 0.8), z + rr(-0.8, 0.8), rr(-0.8, 0.8), rr(1.2, 2.6), rr(-0.8, 0.8), rr(1.8, 3.2), rr(1.2, 2.0), 0.09, 0.085, 0.08, 0.5, -0.25, 0.9, 1.3); // 오래 남는 연기
+  flashLight.position.set(x, y + 1.0, z);
   flashLight.distance = 34;
-  flashLight.intensity = 420;
+  flashLight.intensity = 400;
+  flashLight.userData.glow = true;
   const c = camera.position, dp = Math.hypot(c.x - x, c.y - y, c.z - z);
   cam.shake = Math.max(cam.shake, clamp(1.7 - dp / 13, 0, 1.5));
   SFX.playAt('boom', x, y, z, 1.7, rr(0.9, 1.05));
@@ -1237,6 +1328,7 @@ class Enemy {
     this.flashT = 0.05;
     this.kick = 1;
     this.body.flash.rotation.z = Math.random() * TAU;
+    muzzleGlow(mx, my, mz);
     SFX.playAt(T.sniper ? 'shotDMR' : 'shotFar', mx, my, mz, T.sniper ? 1.3 : T.boss ? 1.15 : 0.95, T.key === 'jugg' ? rr(0.66, 0.72) : T.key === 'heavy' || T.boss ? rr(0.78, 0.86) : rr(0.93, 1.07));
   }
   // dir: 탄 진행 방향(없으면 폭발), power: 래그돌에 줄 충격, blast: 폭발 정보
@@ -2305,6 +2397,7 @@ class RemotePlayer {
     this.flashT = 0.05;
     this.kick = 1;
     this.body.flash.rotation.z = Math.random() * TAU;
+    muzzleGlow(mx, my, mz);
     SFX.playAt(w.sound, mx, my, mz, 0.8, rr(0.96, 1.04));
   }
   update(dt) {
@@ -3825,6 +3918,7 @@ function resetGame() {
   cam.roll = 0; cam.landDip = 0; cam.hurtRoll = 0;
   Object.assign(game, { time: 0, wave: 0, toSpawn: 0, between: 2.2, score: 0, kills: 0, teamKills: 0, headshots: 0, shots: 0, hits: 0, dieT: 0 });
   for (const d of dmgInd) { d.t = 0; d.el.style.opacity = 0; }
+  glare.k = 0;
   hudS.hm = hudS.hurt = 0;
   el.feed.textContent = '';
   input.ads = false;
@@ -4074,7 +4168,6 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) pause
 window.addEventListener('blur', () => { for (const k in input.keys) input.keys[k] = false; });
 
 // 메뉴 버튼
-const QUAL = { high: { pr: 2, shadow: 2048, label: '높음' }, mid: { pr: 1.5, shadow: 1024, label: '중간' }, low: { pr: 1, shadow: 0, label: '낮음' } };
 let prCap = 1, prCur = 1;
 function applyQuality() {
   const q = QUAL[opt.quality] || QUAL.high;
@@ -4087,6 +4180,14 @@ function applyQuality() {
     if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
   }
   for (const id of ['btnQual', 'btnQual2']) $(id).querySelector('b').textContent = q.label;
+  bloom.on = !!q.bloom;
+  // 총의 요철 질감은 "높음"에서만(화소마다 질감을 세 번 더 읽는다), 긁힌 자리의 윤기 질감은 "중간"부터 쓴다
+  for (const m of Object.values(VM.mats)) {
+    const b = (q.fx > 1 && m.userData.bump) || null, r = (q.fx > 0 && m.userData.rough) || null;
+    if (m.userData.bump && m.bumpMap !== b) { m.bumpMap = b; m.needsUpdate = true; }
+    if (m.userData.rough && m.roughnessMap !== r) { m.roughnessMap = r; m.needsUpdate = true; }
+  }
+  applyLights();
 }
 function cycleQuality() {
   opt.quality = opt.quality === 'high' ? 'mid' : opt.quality === 'mid' ? 'low' : 'high';
@@ -4201,6 +4302,128 @@ $('btnRot2').addEventListener('click', toggleRot);
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 
+// ───────────────────────── v0.11 광원 효과: 남의 총구 화염, 가까운 등, 해 눈부심, 빛 번짐
+function muzzleGlow(x, y, z) { // 적·팀원의 총구 화염: 45m 안이면 둘레를 잠깐 비추고 부드러운 빛 덩이를 얹는다
+  const c = camera.position, d = Math.hypot(x - c.x, y - c.y, z - c.z);
+  if (d > 60) return;
+  sparks.emit(x, y, z, 0, 0, 0, 0.05, 0.7, 1, 0.72, 0.4, 0.55, 0, 0, 0);
+  if (d < 45 && flashLight.intensity < 4) { // 내 총구 화염용 빛이 쉬고 있을 때만 빌려 쓴다
+    flashLight.position.set(x, y, z);
+    flashLight.distance = 14;
+    flashLight.intensity = 34;
+    flashLight.userData.glow = false;
+  }
+}
+// 가까운 등 셋을 진짜 빛으로 켠다. 멀어진 등은 꺼뜨리고 그 자리를 새 등으로 옮긴다(갑자기 튀지 않게 0.3초에 걸쳐)
+let lampT = 0;
+function updateLamps(dt) {
+  if (!lampL[0].light.parent) return;
+  const act = lampL.filter((s) => s.light.parent);
+  if ((lampT -= dt) <= 0) {
+    lampT = 0.4;
+    const night = !!(ENVS[envName] && ENVS[envName].night), c = camera.position;
+    const near = (WORLD.lamps || []).filter((l) => night || !l.night).map((l) => ({ l, d: Math.hypot(l.x - c.x, l.y - c.y, l.z - c.z) })).filter((q) => q.d < 48).sort((a, b) => a.d - b.d).slice(0, act.length).map((q) => q.l);
+    for (const s of act) s.keep = !!s.lamp && near.includes(s.lamp);
+    const free = near.filter((l) => !act.some((s) => s.keep && s.lamp === l));
+    for (const s of act) s.next = s.keep ? null : free.shift() || null;
+  }
+  for (const s of act) {
+    if (s.keep) s.k = Math.min(1, s.k + dt * 3.3);
+    else {
+      s.k = Math.max(0, s.k - dt * 3.3);
+      if (s.k === 0) {
+        s.lamp = s.next;
+        s.next = null;
+        s.keep = !!s.lamp;
+        if (s.lamp) s.light.position.set(s.lamp.x, s.lamp.y - 0.5, s.lamp.z);
+      }
+    }
+    // 등 바로 밑의 밝기가 등의 높이와 상관없이 비슷하도록 높이에 맞춰 세기를 정한다(야외등 3.4, 실내등 2.4)
+    s.light.intensity = s.lamp ? (s.lamp.night ? 3.4 : 2.4) * Math.pow(Math.max(1.5, (s.lamp.h || s.lamp.y) - 0.5), 1.7) * s.k : 0;
+  }
+}
+// 해 눈부심: 해 쪽을 보면 화면에 뿌연 빛이 번진다(화면 위에 얹는 그림 한 장. 그리는 비용이 거의 없다). 해가 가려지면 사라진다
+const glare = { k: 0 };
+function updateGlare(dt) {
+  const g = (ENVS[envName] && ENVS[envName].glare) || 0;
+  let want = 0;
+  if (g > 0 && player.alive) {
+    camera.getWorldDirection(_f);
+    const d = _f.dot(sunDir);
+    if (d > 0.6) {
+      _v.copy(camera.position).addScaledVector(sunDir, 400).project(camera);
+      glare.x = (_v.x * 0.5 + 0.5) * LW;
+      glare.y = (-_v.y * 0.5 + 0.5) * LH;
+      const a = clamp((d - 0.8) / 0.19, 0, 1);
+      want = a * a * g * ((vm.shadeTarget ?? 1) > 0.5 ? 1 : 0) * (1 - vm.adsT * 0.35);
+    }
+  }
+  glare.k = damp(glare.k, want, 7, dt);
+  const o = Math.round(glare.k * 50) / 50;
+  if (cache.glareO !== o) { cache.glareO = o; el.glare.style.opacity = o; }
+  if (o > 0) el.glare.style.transform = `translate(${(glare.x || 0).toFixed(1)}px,${(glare.y || 0).toFixed(1)}px)`;
+}
+// 빛 번짐(블룸): 다 그린 화면에서 밝은 곳만 4분의 1 크기로 뽑아 흐리게 한 뒤 화면에 덧씌운다. 품질 "높음"에서만 돈다
+const bloom = (() => {
+  const cam2 = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), sc = new THREE.Scene(), size = new THREE.Vector2();
+  const vs = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+  const mk = (fs, uniforms, add) => new THREE.ShaderMaterial({ uniforms, vertexShader: vs, fragmentShader: fs, depthTest: false, depthWrite: false, toneMapped: false, transparent: !!add, blending: add ? THREE.AdditiveBlending : THREE.NoBlending });
+  // 밝은 곳 뽑기 + 4×4 평균으로 줄이기
+  const mBright = mk(`uniform sampler2D t; uniform vec2 px; uniform float th; varying vec2 vUv;
+    void main(){
+      vec3 c = (texture2D(t, vUv + px * vec2(-1.0, -1.0)).rgb + texture2D(t, vUv + px * vec2(1.0, -1.0)).rgb + texture2D(t, vUv + px * vec2(-1.0, 1.0)).rgb + texture2D(t, vUv + px).rgb) * 0.25;
+      float l = max(c.r, max(c.g, c.b));
+      gl_FragColor = vec4(c * smoothstep(th, th + 0.16, l), 1.0);
+    }`, { t: { value: null }, px: { value: new THREE.Vector2() }, th: { value: 0.8 } });
+  // 한 방향 흐림(가우스 9칸을 5번 읽기로)
+  const mBlur = mk(`uniform sampler2D t; uniform vec2 d; varying vec2 vUv;
+    void main(){
+      vec3 c = texture2D(t, vUv).rgb * 0.227027;
+      c += (texture2D(t, vUv + d * 1.3846).rgb + texture2D(t, vUv - d * 1.3846).rgb) * 0.316216;
+      c += (texture2D(t, vUv + d * 3.2308).rgb + texture2D(t, vUv - d * 3.2308).rgb) * 0.070270;
+      gl_FragColor = vec4(c, 1.0);
+    }`, { t: { value: null }, d: { value: new THREE.Vector2() } });
+  const mAdd = mk('uniform sampler2D t; uniform float k; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(t, vUv).rgb * k, 1.0); }', { t: { value: null }, k: { value: 0.75 } }, true);
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mBright);
+  quad.frustumCulled = false;
+  sc.add(quad);
+  let fb = null, a = null, b = null, w0 = 0, h0 = 0;
+  const pass = (mat, target) => { quad.material = mat; renderer.setRenderTarget(target); renderer.render(sc, cam2); };
+  return {
+    on: false, k: mAdd.uniforms.k, th: mBright.uniforms.th, err: '',
+    run() {
+      try {
+        renderer.getDrawingBufferSize(size);
+        const w = size.x | 0, h = size.y | 0;
+        if (w < 8 || h < 8) return;
+        if (w !== w0 || h !== h0) { // 화면 크기(화소 배율)가 바뀌면 다시 만든다
+          w0 = w; h0 = h;
+          if (fb) { fb.dispose(); a.dispose(); b.dispose(); }
+          fb = new THREE.FramebufferTexture(w, h);
+          fb.minFilter = fb.magFilter = THREE.LinearFilter;
+          const o = { depthBuffer: false, stencilBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter };
+          a = new THREE.WebGLRenderTarget(Math.max(2, w >> 2), Math.max(2, h >> 2), o);
+          b = new THREE.WebGLRenderTarget(Math.max(2, w >> 2), Math.max(2, h >> 2), o);
+        }
+        renderer.copyFramebufferToTexture(fb);
+        const eb = (ENVS[envName] && ENVS[envName].bloom) || [0.3, 0.9];
+        mAdd.uniforms.k.value = eb[0];
+        mBright.uniforms.th.value = eb[1];
+        mBright.uniforms.t.value = fb;
+        mBright.uniforms.px.value.set(1 / w, 1 / h);
+        pass(mBright, a);
+        for (let i = 0; i < 2; i++) { // 두 번 돌려 넓게 번지게 한다
+          const s = 1 + i * 1.3;
+          mBlur.uniforms.t.value = a.texture; mBlur.uniforms.d.value.set(s / a.width, 0); pass(mBlur, b);
+          mBlur.uniforms.t.value = b.texture; mBlur.uniforms.d.value.set(0, s / a.height); pass(mBlur, a);
+        }
+        mAdd.uniforms.t.value = a.texture;
+        pass(mAdd, null);
+      } catch (e) { this.on = false; this.err = String((e && e.message) || e); renderer.setRenderTarget(null); } // 지원하지 않는 기기에서는 끈다
+    },
+  };
+})();
+
 // ───────────────────────── 루프
 let last = performance.now(), ema = 16, dynT = 0, menuT = 0, slowN = 0;
 const dbg = { noDyn: false, freeze: false }; // freeze: 자동 검증에서 장면을 멈춰 두고 화면을 찍을 때
@@ -4223,12 +4446,15 @@ function update(dt) {
   updateGrenades(dt);
   updateBarrage(dt);
   dust.update(dt); sparks.update(dt); tracers.update(dt); shells.update(dt);
-  flashLight.intensity = flashLight.intensity < 0.05 ? 0 : flashLight.intensity * Math.exp(-dt * 55);
+  // 총구 화염은 두세 장면 만에 꺼지고, 폭발의 빛은 0.5초쯤에 걸쳐 잦아든다
+  flashLight.intensity = flashLight.intensity < 0.05 ? 0 : flashLight.intensity * Math.exp(-dt * (flashLight.userData.glow ? 7 : 55));
+  updateLamps(dt);
   placeCamera(dt);
   updateViewmodel(dt);
   updateHud(dt);
   updateBossHud();
   updateCampHud(dt);
+  updateGlare(dt);
 }
 function render() {
   if (cloudMat) cloudMat.uniforms.uTime.value = performance.now() / 1000;
@@ -4242,6 +4468,7 @@ function render() {
     renderer.clearDepth();
     renderer.render(vmScene, vmCam);
   }
+  if (bloom.on) bloom.run();
 }
 function frame(now) {
   requestAnimationFrame(frame);
@@ -4262,7 +4489,8 @@ function frame(now) {
     dynT += dt;
     if (dynT > 1.5) {
       dynT = 0;
-      const lo = Math.max(0.6, prCap * 0.55);
+      // "높음"은 화소 배율을 80%까지만 낮추고, 그래도 느리면 "중간"으로 내린다(빛 번짐과 가까운 등을 끄는 쪽이 화면을 흐리게 하는 것보다 낫다). 그 밖에는 55%까지
+      const lo = Math.max(0.6, prCap * (opt.quality === 'high' ? 0.8 : 0.55));
       if (ema > 30 && prCur <= lo + 0.001 && opt.quality !== 'low') {
         if (++slowN >= 2) { slowN = 0; cycleQuality(); feed('그래픽 품질 자동 조정'); }
       } else slowN = 0;
@@ -4288,4 +4516,4 @@ setState('menu');
 requestAnimationFrame(frame);
 
 // 자동 검증용 훅
-window.__yz = { step: (n, dt) => { for (let i = 0; i < n && live(); i++) update(dt); }, bossOf, bossArmor, bossWave, bossTier, bossBarrage, bossSpawn, barrage, barrageApply, barrageClear, startWave, rayEnemy, updateWaves, coop, NET, isPvp, isTeam, isMis, teamOf, mate, teamKills, MISSIONS, mis, updateMission, misEnd, envOf: () => envName, shareUrl, pvpTable, coopToLobby, pauseGame, resumeGame, netFailText, addPickup, findPath, cellNear, humans, coopHost, coopJoin, coopHostStart, coopEnd, lob, RemotePlayer, chestY, camp, allies, overwatch, EPISODES, SQUAD, startEpisode, squadJoin, squadLeave, squadHold, squadFollow, setOverwatch, openEpisodes, quitToMenu, radioQ, store, loadMap, applyEnv, ENVS, WORLD, B, START, rayWorld, losClear, blockedAt, findPath, prog, openSupply, pickSupply, applySupply, SFX, WH, dust, sparks, TYPES, gren, throwGrenade, explode, ORDER, MOCAP, aa, VM, scene, colliders, toggleRot, game, player, enemies, input, vm, W, opt, dbg, renderer, camera, pickups, spawnEnemy, startGame, hurtPlayer, switchWeapon, startReload, applyQuality, NAV };
+window.__yz = { step: (n, dt) => { for (let i = 0; i < n && live(); i++) update(dt); }, hit, TORCH_I, bloom, lampL, torch, flashLight, MAPS, QUAL, cycleQuality, glare, sunDir, vmCam, bossOf, bossArmor, bossWave, bossTier, bossBarrage, bossSpawn, barrage, barrageApply, barrageClear, startWave, rayEnemy, updateWaves, coop, NET, isPvp, isTeam, isMis, teamOf, mate, teamKills, MISSIONS, mis, updateMission, misEnd, envOf: () => envName, shareUrl, pvpTable, coopToLobby, pauseGame, resumeGame, netFailText, addPickup, findPath, cellNear, humans, coopHost, coopJoin, coopHostStart, coopEnd, lob, RemotePlayer, chestY, camp, allies, overwatch, EPISODES, SQUAD, startEpisode, squadJoin, squadLeave, squadHold, squadFollow, setOverwatch, openEpisodes, quitToMenu, radioQ, store, loadMap, applyEnv, ENVS, WORLD, B, START, rayWorld, losClear, blockedAt, prog, openSupply, pickSupply, applySupply, SFX, WH, dust, sparks, TYPES, gren, throwGrenade, explode, ORDER, MOCAP, aa, VM, scene, colliders, toggleRot, game, player, enemies, input, vm, W, opt, dbg, renderer, camera, pickups, spawnEnemy, startGame, hurtPlayer, switchWeapon, startReload, applyQuality, NAV };

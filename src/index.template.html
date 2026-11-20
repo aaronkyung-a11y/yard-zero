@@ -164,6 +164,8 @@ body.portrait .cards{grid-template-columns:1fr}
 #boss em:nth-of-type(2){left:66%}
 #boss s{display:block;height:3px;margin-top:3px;background:var(--amber);transform-origin:left center;transform:scaleX(0)}
 body.bossOn #msg{top:29%}
+/* 해 눈부심: 해가 있는 화면 자리에 얹는 뿌연 빛 */
+#glare{position:absolute;left:0;top:0;width:130vmin;height:130vmin;margin:-65vmin 0 0 -65vmin;opacity:0;will-change:transform,opacity;background:radial-gradient(circle,rgba(255,248,230,.92) 0,rgba(255,240,205,.5) 5%,rgba(255,228,175,.2) 18%,rgba(255,222,165,.07) 36%,rgba(255,220,160,0) 60%)}
 #shellWarn{position:absolute;left:50%;top:62%;transform:translateX(-50%);white-space:nowrap;font:700 clamp(13px,3.8vmin,18px)/1 var(--body);letter-spacing:.08em;color:#fff;background:rgba(214,40,16,.86);padding:6px 12px;animation:shw .45s steps(2,jump-none) infinite}
 @keyframes shw{0%{opacity:1}100%{opacity:.55}}
 #obj b{font:700 clamp(12px,3.4vmin,16px)/1 var(--body);letter-spacing:.04em}
@@ -238,6 +240,7 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
 <div id="hurt"></div>
 
 <div id="hud" class="hidden">
+  <div id="glare"></div>
   <div id="scope" class="hidden"><i class="h"></i><i class="v"></i><i class="c"></i></div>
   <div id="topL"><span class="lbl">HP</span><div id="hpBar"><i id="hpFill"></i></div><b id="hpNum">100</b></div>
   <div id="topC"><span id="waveTxt">WAVE 1</span><span id="enemyTxt">적 4</span></div>
