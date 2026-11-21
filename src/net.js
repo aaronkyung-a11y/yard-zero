@@ -4,6 +4,9 @@
 //  - 처음 서로를 찾는 중개만 PeerJS 공개 서버를 쓰고, 게임 데이터는 폰끼리 직접 오간다
 //  - 중계(TURN): PeerJS 기본 설정의 중계 주소(eu-0/us-0.turn.peerjs.com)는 2026-11-14 조회에서 DNS 응답이 비어 있어 쓰지 않는다.
 //    RELAY에 중계 서버를 넣으면 직접 연결이 안 되는 통신망(같은 공유기 안에서 폰끼리 막힌 경우 등)에서도 이어진다
+//  - 같은 와이파이에서만 안 이어지는 경우(2026-11-21 조사): 안드로이드 17부터는 브라우저 앱에 '근처 기기' 권한(ACCESS_LOCAL_NETWORK)이 없으면
+//    운영체제가 같은 와이파이의 다른 기기와 주고받는 통신을 막는다. 그러면 내부 주소끼리의 길이 막히고, 남는 길(공인 주소끼리)은 공유기가 되돌려 보내 주어야만 열린다.
+//    중계 서버가 없는 지금은 게임이 이것을 대신 풀 수 없어서, 실패했을 때 권한을 켜는 방법을 안내한다(main.js의 lanHelp)
 import { Peer } from 'peerjs';
 
 const STUN = ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478'];
@@ -14,7 +17,8 @@ export const MAX_GUESTS = 3;
 // role: '' | 'host' | 'guest'. links: 연결된 상대(방장에게는 참가자들, 참가자에게는 방장 하나)
 // cb: open(code) 방이 열림 / join(link) 상대와 연결됨 / leave(link, why) 끊김 / ev(link, msg) 사건 / st(link, arr) 상태 / error(kind, detail) / info() 핑·경로 갱신
 // cb.miss(diag): (방장) 들어오려던 상대와 끝내 이어지지 못함. lastDiag: 가장 최근에 실패한 연결의 진단
-export const NET = { role: '', code: '', peer: null, links: [], cb: {}, timer: 0, tries: 0, joinTimer: 0, lastDiag: null };
+// meta: 이 폰의 종류(예: '안드로이드 17·Chrome'). 참가할 때 방장에게 알려 주고, 진단 문자열에 넣는다
+export const NET = { role: '', code: '', peer: null, links: [], cb: {}, timer: 0, tries: 0, joinTimer: 0, lastDiag: null, meta: '' };
 
 const now = () => performance.now();
 const peerOpts = () => Object.assign({ debug: 0, config: { iceServers: [{ urls: STUN }, ...RELAY], sdpSemantics: 'unified-plan' } }, window.__yzPeer || {}); // 테스트에서는 window.__yzPeer로 로컬 중개 서버를 가리킨다
@@ -73,12 +77,14 @@ export function diagOf(link) {
   const f = (o, m) => ['host', 'srflx', 'relay', 'prflx'].filter((k) => o[k]).map((k) => (k === 'host' ? (m ? '내부(가림)' : '내부') : k === 'srflx' ? '공인' : k === 'relay' ? '중계' : '반사')).join('·') || '없음';
   const same = d.pub && d.rpub ? d.pub === d.rpub : null;
   const ICE = { new: '시작 전', checking: '확인 중', connected: '연결됨', completed: '연결됨', disconnected: '끊김', failed: '실패', none: '없음' };
-  return { same, noLocal: !Object.keys(d.loc).length, noPub: !d.loc.srflx, noRemote: !Object.keys(d.rem).length, relay: !!(d.loc.relay || d.rem.relay), ice: d.ice,
-    code: `이 폰 ${f(d.loc, d.mdns)} / 상대 ${f(d.rem, d.rmdns)} / ${same === null ? '망 비교 불가' : same ? '같은 공유기' : '다른 통신망'} / ${ICE[d.ice] || d.ice}` };
+  const tag = (t) => (t ? `(${t})` : '');
+  return { same, noLocal: !Object.keys(d.loc).length, noPub: !d.loc.srflx, noRemote: !Object.keys(d.rem).length, relay: !!(d.loc.relay || d.rem.relay), ice: d.ice, peer: link.plat || '',
+    code: `이 폰${tag(NET.meta)} ${f(d.loc, d.mdns)} / 상대${tag(link.plat)} ${f(d.rem, d.rmdns)} / ${same === null ? '망 비교 불가' : same ? '같은 공유기' : '다른 통신망'} / ${ICE[d.ice] || d.ice}` };
 }
 
 function mkLink(conn, originator) {
-  const link = { id: conn.peer, conn, u: null, open: false, ping: -1, route: '', rx: now(), born: now(), pid: -1, routeT: 0, diag: null };
+  const link = { id: conn.peer, conn, u: null, open: false, ping: -1, route: '', rx: now(), born: now(), pid: -1, routeT: 0, diag: null, plat: '' };
+  if (!originator && conn.metadata && typeof conn.metadata.p === 'string') link.plat = conn.metadata.p.slice(0, 40); // 들어오려는 폰이 알려 준 종류. 화면에는 글자로만 넣는다
   watch(link);
   const pc = conn.peerConnection;
   if (pc && !originator) { // 상대가 여는 상태 채널을 받는다. PeerJS가 걸어 둔 처리기는 첫 채널에만 필요하므로 감싸서 넘긴다
@@ -192,7 +198,7 @@ export function join(code) {
   const peer = (NET.peer = new Peer(peerOpts()));
   peer.on('open', () => {
     if (NET.peer !== peer) return;
-    mkLink(peer.connect(PREFIX + code, { label: 'ev', reliable: true, serialization: 'json' }), true);
+    mkLink(peer.connect(PREFIX + code, { label: 'ev', reliable: true, serialization: 'json', metadata: { p: NET.meta } }), true);
   });
   peer.on('error', (e) => { if (NET.peer === peer) onPeerError(e); });
   clearTimeout(NET.joinTimer);

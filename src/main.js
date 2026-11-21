@@ -12,7 +12,7 @@ import { buildViewmodel } from './viewmodel.js';
 import { EPISODES, SQUAD, MISSIONS } from './episodes.js';
 import { NET, host as netHost, join as netJoin, sendEv, sendSt, close as netClose } from './net.js';
 
-const VERSION = 'v0.11';
+const VERSION = 'v0.11.1';
 const UP = new THREE.Vector3(0, 1, 0);
 const _f = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _d = new THREE.Vector3(), _v = new THREE.Vector3(), _w = new THREE.Vector3(), _m = new THREE.Vector3(), _mz = new THREE.Vector3();
 const ZAXIS = new THREE.Vector3(0, 0, 1);
@@ -853,10 +853,12 @@ function updateViewmodel(dt) {
 }
 
 // ───────────────────────── 플레이어
+// v0.11.1: 난이도를 아주 조금 낮췄다. 적의 총알·지휘관의 포격·폭발에서 받는 피해에 곱한다. 사람끼리 하는 대결에는 곱하지 않는다(서로에게 똑같이 걸리는 값이라 난이도가 아니다)
+const EASE = 0.92;
 // by: 대결에서 나를 맞힌 사람의 번호(없으면 내 수류탄 같은 자기 피해), head: 머리에 맞았나
 function hurtPlayer(dmg, from, by = -1, head = false) {
   if (!player.alive || coop.safeT > 0) return;
-  player.hp -= dmg * (1 - 0.15 * prog.lv.armor);
+  player.hp -= dmg * (isPvp() ? 1 : EASE) * (1 - 0.15 * prog.lv.armor);
   player.lastHurt = game.time;
   const d = dmgInd[dmgK];
   dmgK = (dmgK + 1) % dmgInd.length;
@@ -1055,9 +1057,9 @@ const TYPES = {
   // shell: [원의 반경(m), 중심 피해, 원이 뜬 뒤 떨어지기까지(초)], adds: 체력 66% · 33%에서 부르는 증원, rage: 마지막 단계의 [이동 배율, 장전 시간, 연사 간격], turn: 돌아서는 빠르기(rad/s, 보통 적은 6.5), far: 표적이 28m보다 멀 때의 이동 배율(느린 철갑이 오래 걸어오지 않게),
   // suppress: 표적이 숨어도 이 시간(초) 동안은 마지막으로 본 자리에 계속 쏜다(제압 사격). 숨어 있으면 탄창이 비고, 장전하는 틈이 온다
   // sweep: 탄은 몸이 향한 쪽에서 이 각(rad) 안으로만 나간다(돌아서는 동안에는 탄 줄기가 뒤따라온다), windup: 장전을 마친 뒤 다시 쏘기까지의 뜸(초)
-  jugg: { key: 'jugg', boss: true, name: '지휘관 철갑', short: '철갑', title: '중장갑 지휘관', tip: '정면은 방탄 · 장전할 때와 등 뒤를 노려라', label: '지휘관 철갑 제거', score: 2000, hp: 3600, mat: 'boss', puppet: 0, scale: 1.3, speed: 0.5, pref: [7, 15], burst: [40, 40], mag: 40, reloadT: 3.6, rof: 0.07, dmg: [4, 6], sig: 1.9, react: 0.9, headMul: 1.5, flinch: 0, kneel: 0, moveFire: 1.5,
+  jugg: { key: 'jugg', boss: true, name: '지휘관 철갑', short: '철갑', title: '중장갑 지휘관', tip: '정면은 방탄 · 장전할 때와 등 뒤를 노려라', label: '지휘관 철갑 제거', score: 2000, hp: 3350, mat: 'boss', puppet: 0, scale: 1.3, speed: 0.5, pref: [7, 15], burst: [40, 40], mag: 40, reloadT: 3.6, rof: 0.07, dmg: [4, 6], sig: 1.9, react: 0.9, headMul: 1.5, flinch: 0, kneel: 0, moveFire: 1.5,
     armor: 0.2, turn: 2.0, far: 1.9, suppress: 3.4, sweep: 0.14, windup: 0.9, open: true, flush: true, call: 0, shellEvery: [0, 8, 5], shell: [3.4, 60, 1.6], adds: [['rusher', 'rifle'], ['rusher', 'rusher', 'rifle']], rage: [1.35, 3.0, 0.06], weak: 1.25 },
-  bomb: { key: 'bomb', boss: true, name: '지휘관 화약고', short: '화약고', title: '포격 지휘관', tip: '붉은 원에서 벗어나라 · 무전을 칠 때가 틈이다', label: '지휘관 화약고 제거', score: 2000, hp: 2800, mat: 'boss2', puppet: 0, scale: 1.18, speed: 0.95, pref: [16, 28], burst: [4, 6], mag: 30, reloadT: 2.2, rof: 0.085, dmg: [5, 7.5], sig: 1.05, react: 0.9, headMul: 1.5, flinch: 0, kneel: 0.3, moveFire: 1.4,
+  bomb: { key: 'bomb', boss: true, name: '지휘관 화약고', short: '화약고', title: '포격 지휘관', tip: '붉은 원에서 벗어나라 · 무전을 칠 때가 틈이다', label: '지휘관 화약고 제거', score: 2000, hp: 2600, mat: 'boss2', puppet: 0, scale: 1.18, speed: 0.95, pref: [16, 28], burst: [4, 6], mag: 30, reloadT: 2.2, rof: 0.085, dmg: [5, 7.5], sig: 1.05, react: 0.9, headMul: 1.5, flinch: 0, kneel: 0.3, moveFire: 1.4,
     armor: 0.55, turn: 3.5, windup: 0.4, open: false, flush: false, call: 1.3, shellEvery: [7.5, 6, 5.2], shell: [4.2, 75, 1.5], adds: [['rifle', 'rusher'], ['rifle', 'rusher', 'rusher']], rage: [1.15, 1.8, 0.08], weak: 1.25 },
 };
 const laserGeo = new THREE.BoxGeometry(0.016, 0.016, 1);
@@ -2974,8 +2976,37 @@ function coopRoster() { // 방장: 명단(번호·핑·연결 경로)을 모두�
   lobRender();
 }
 
+// ── 이 폰의 종류: 연결 실패 안내와 진단 표시에 쓴다
+//  안드로이드 17부터는 브라우저 앱에 '근처 기기' 권한이 있어야 같은 와이파이의 다른 기기와 직접 통신할 수 있다(없으면 운영체제가 조용히 막는다. 인터넷·모바일 데이터 쪽 통신은 그대로다).
+//  크롬 계열은 UA 문자열의 안드로이드 버전을 10으로 고정해 두므로 실제 버전은 userAgentData에서 받는다. 받지 못하면 ver = 0(모름)
+const plat = { os: 'other', ver: 0, br: 'other' };
+function platRead(ua, uad) {
+  plat.os = /Android/i.test(ua) ? 'android' : /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) ? 'ios' : 'other';
+  plat.br = /SamsungBrowser/i.test(ua) ? 'samsung' : /CriOS/i.test(ua) ? 'chrome' : /; wv\)|KAKAOTALK|NAVER\(inapp|Instagram|FBAN|FBAV|Line\//i.test(ua) ? 'inapp' : /Whale|EdgA?\/|EdgiOS|OPR\/|Firefox|FxiOS/i.test(ua) ? 'other'
+    : /Chrome\//.test(ua) ? 'chrome' : plat.os === 'ios' && (navigator.standalone || /Safari/.test(ua)) ? 'safari' : 'other';
+  const m = /Android (\d+)/.exec(ua);
+  plat.ver = m && !/Android 10; K\)/.test(ua) ? +m[1] : 0;
+  if (plat.os === 'android' && uad && uad.getHighEntropyValues) uad.getHighEntropyValues(['platformVersion']).then((h) => { const v = parseInt(h && h.platformVersion, 10); if (v > 0) plat.ver = v; }).catch(() => {});
+}
+const platApp = () => (plat.br === 'chrome' ? 'Chrome' : plat.br === 'samsung' ? '삼성 인터넷' : '이 게임을 연 앱');
+const platTag = () => (plat.os === 'android' ? `안드로이드${plat.ver ? ' ' + plat.ver : ''}` : plat.os === 'ios' ? '아이폰' : '기타 기기') + '·' + ({ chrome: 'Chrome', samsung: '삼성 인터넷', safari: 'Safari', inapp: '앱 속 브라우저' }[plat.br] || '기타 브라우저');
+// '근처 기기' 권한을 다시 주는 방법. "허용인지 확인"이 아니라 "다시 누르기"로 안내한다: 이 권한은 묶음이라, 예전에 블루투스 때문에 허용해 둔 폰은
+// 설정 화면에 "허용"으로 보여도 안드로이드 17에서 새로 생긴 같은 와이파이 통신 권한은 빠져 있을 수 있다(설정에서 다시 허용하면 묶음 전체가 들어간다).
+// "허용 안함"을 누르면 안드로이드가 그 앱을 닫으므로 게임이 닫힐 수 있다고 함께 알린다
+const lanPerm = (app) => `설정 → 애플리케이션 → ${app} → 권한 → 근처 기기에서 "허용 안함"을 눌렀다가 다시 "허용"을 누르세요`;
+// 같은 와이파이(같은 공유기)에 있는데 폰끼리 직접 이어지지 못했을 때의 해결 안내. 원인은 둘 중 하나다:
+//  ① 폰의 권한(안드로이드 17 이상의 '근처 기기', 아이폰의 Safari 아닌 앱은 '로컬 네트워크') ② 와이파이(공유기)가 기기끼리의 통신을 막음. 게임에서는 둘을 구별할 수 없어 차례로 해 보게 한다
+function lanHelp() {
+  const mine = plat.os === 'android' && (plat.ver >= 17 || !plat.ver); // 이 폰이 안드로이드 17 이상이거나 버전을 모른다
+  const first = mine ? `안드로이드 17 이상인 폰은 ${lanPerm(platApp())}(이미 허용이어도, 두 폰 모두. 게임이 닫히면 다시 여세요).`
+    : plat.os === 'ios' && plat.br !== 'safari' ? `이 아이폰은 설정 → 개인정보 보호 및 보안 → 로컬 네트워크에서 ${platApp()}을 켜세요. 상대가 안드로이드 17 이상이면 그 폰은 Chrome 권한의 "근처 기기"를 다시 허용하세요.` // 자세한 방법은 그 폰의 화면에 나온다
+    : `상대 폰이 안드로이드 17 이상이면 그 폰의 ${lanPerm('Chrome')}(이미 허용이어도).`;
+  return `\n① ${first}\n② ${mine ? '그래도 안 되면' : '해당하지 않거나 그래도 안 되면'} 와이파이가 폰끼리의 통신을 막는 것으로 보입니다. 한 폰을 모바일 데이터로 바꾸세요.`; // 줄을 나눠 보여 준다(#coErr·#coWarn은 줄바꿈을 살린다)
+}
+platRead(navigator.userAgent || '', navigator.userAgentData);
+
 // ── 로비 화면: 방 만들기 / 코드로 참가 / 명단
-const lob = { step: 'choose', entry: '', status: '', joinT: 0 };
+const lob = { step: 'choose', entry: '', status: '', joinT: 0, warn: '' };
 const NET_ERR = {
   noroom: '그 코드의 방을 찾지 못했습니다. 코드를 다시 확인하세요.',
   broker: '연결을 이어 주는 서버에 닿지 못했습니다. 인터넷 연결을 확인하고 다시 시도하세요.',
@@ -2989,12 +3020,18 @@ function netFailText(kind) {
   if (kind !== 'timeout' && kind !== 'webrtc') return NET_ERR[kind] || NET_ERR.unknown;
   const d = NET.lastDiag;
   if (!d) return NET_ERR.timeout;
-  let why = '두 폰 사이에 직접 길이 열리지 않았습니다. 한 폰의 통신망을 바꿔(와이파이 ↔ 모바일 데이터) 다시 시도해 보세요.';
+  let why = netWhyPlain(d);
   if (d.noLocal) why = '이 폰에서 연결에 쓸 주소를 얻지 못했습니다. 통신망이 게임 연결(UDP)을 막고 있는 것으로 보입니다. 다른 와이파이나 모바일 데이터로 다시 시도하세요.';
   else if (d.noRemote) why = '방장 폰의 응답을 받지 못했습니다. 방장 폰에 방 화면이 켜져 있는지 확인하고 다시 시도하세요.';
-  else if (d.same) why = '두 폰이 같은 와이파이(같은 공유기)에 있는데, 이 와이파이에서는 폰끼리 직접 통신이 되지 않습니다. 한 폰의 와이파이를 끄고 모바일 데이터로 다시 시도하세요.';
+  else if (d.same) why = `방장 폰과 같은 와이파이에 있는데 직접 이어지지 않습니다.${lanHelp()}`;
   else if (d.noPub) why = '이 폰의 통신망이 게임 연결(UDP)을 막고 있습니다. 다른 와이파이나 모바일 데이터로 다시 시도하세요.';
-  return `연결하지 못했습니다. ${why} [진단: ${d.code}]`;
+  return `연결하지 못했습니다. ${why}\n[진단: ${d.code}]`;
+}
+// 같은 공유기인지 알 수 없거나 다른 통신망일 때의 안내
+function netWhyPlain(d) {
+  let why = '두 폰 사이에 직접 길이 열리지 않았습니다. 한 폰의 통신망을 바꿔(와이파이 ↔ 모바일 데이터) 다시 시도해 보세요.';
+  if (d && d.same === null && plat.os === 'android' && (plat.ver >= 17 || !plat.ver)) why += ` 같은 와이파이라면 ${lanPerm(platApp())}(이미 허용이어도).`;
+  return why;
 }
 const MODE_LABEL = { surv: '협동 생존', mis: '협동 임무', pvp: '대결 (개인전)', tdm: '대결 (팀전)' };
 function lobCfg() { // 모드와 그에 딸린 설정. 방장만 바꿀 수 있고 참가자에게는 방장이 고른 값이 보인다. 팀은 각자 바꾼다
@@ -3009,15 +3046,22 @@ function lobCfg() { // 모드와 그에 딸린 설정. 방장만 바꿀 수 있�
   $('btnCoMis').classList.toggle('hidden', !mis);
   $('btnCoTeam').classList.toggle('hidden', !tdm);
   for (const id of ['btnCoMode', 'btnCoMap', 'btnCoKt', 'btnCoMis']) $(id).disabled = !coop.host;
-  $('coHelpS').classList.toggle('hidden', c.mode !== 'surv');
-  $('coHelpP').classList.toggle('hidden', c.mode !== 'pvp');
-  $('coHelpT').classList.toggle('hidden', !tdm);
-  $('coHelpM').classList.toggle('hidden', !mis);
+  $('coHelpS').classList.toggle('hidden', !!lob.warn || c.mode !== 'surv'); // 연결 실패 안내가 떠 있는 동안에는 모드 설명 자리를 내준다
+  $('coHelpP').classList.toggle('hidden', !!lob.warn || c.mode !== 'pvp');
+  $('coHelpT').classList.toggle('hidden', !!lob.warn || !tdm);
+  $('coHelpM').classList.toggle('hidden', !!lob.warn || !mis);
   $('coHelpMB').textContent = MISSIONS[c.mi].brief;
 }
 function lobStatus(t) {
   lob.status = t;
   $('coStatus').textContent = t;
+}
+// 방장: 들어오려던 폰과 이어지지 못했을 때의 안내. 글이 길어서 방 화면의 모드 설명 자리에 대신 보여 준다. 빈 글이면 지운다
+function lobWarn(t) {
+  lob.warn = t;
+  $('coWarn').textContent = t;
+  $('coWarn').classList.toggle('hidden', !t);
+  lobCfg();
 }
 function lobShow(step) {
   lob.step = step;
@@ -3061,6 +3105,7 @@ function lobRender() {
 function openCoop() {
   SFX.initAudio(); // 이후 방장이 시작할 때 소리가 나도록 누른 김에 열어 둔다
   lobStatus('');
+  lobWarn('');
   $('coErr').textContent = '';
   lobShow('choose');
   setState('coop');
@@ -3083,7 +3128,10 @@ function coopFail(text) { // 연결 실패·끊김
 function coopWire() { // 전송 계층의 알림을 게임에 잇는다
   NET.cb = {
     open(code) { lobStatus('친구에게 방 코드를 알려 주세요.'); $('coCode').textContent = code; coopRoster(); lobShow('room'); },
-    join(link) { if (!coop.host) { lobStatus('연결됨. 입장하는 중'); sendEv({ t: 'hi', v: VERSION }, link); } },
+    join(link) {
+      if (!coop.host) { lobStatus('연결됨. 입장하는 중'); sendEv({ t: 'hi', v: VERSION }, link); }
+      else if (lob.warn) { lobWarn(''); lobStatus('친구에게 방 코드를 알려 주세요.'); } // 앞서 실패했던 안내는 누군가 들어오면 지운다
+    },
     leave(link) {
       if (!coop.on) return;
       if (!coop.host) { coopFail(coop.started || coop.pid > 0 ? '방장과의 연결이 끊겼습니다.' : netFailText('timeout')); return; }
@@ -3099,7 +3147,8 @@ function coopWire() { // 전송 계층의 알림을 게임에 잇는다
     // 방장: 누군가 들어오려 했지만 끝내 이어지지 못했다
     miss(d) {
       if (!coop.on || !coop.host || game.state !== 'coop') return;
-      lobStatus(`들어오려던 폰과 연결되지 않았습니다. ${d && d.same ? '같은 와이파이에서 폰끼리 직접 통신이 막힌 것으로 보입니다. 한 폰의 와이파이를 끄고 모바일 데이터로 다시 시도하세요.' : '한 폰의 통신망을 바꿔(와이파이 ↔ 모바일 데이터) 다시 시도해 보세요.'}${d ? ` [진단: ${d.code}]` : ''}`);
+      lobStatus('들어오려던 폰과 연결되지 않았습니다. 안내를 확인하세요.');
+      lobWarn(`${d && d.same ? `들어오려던 폰과 같은 와이파이에 있는데 직접 이어지지 않습니다.${lanHelp()}` : netWhyPlain(d)}${d ? `\n[진단: ${d.code}]` : ''}`);
     },
     info() {
       if (coop.on && coop.host) coopRoster();
@@ -3111,19 +3160,23 @@ function coopHost() {
   SFX.initAudio();
   if (coop.on) coopEnd();
   Object.assign(coop, { on: true, host: true, started: false, pid: 0, roster: [0], info: [[0, -1, '']], lost: '' });
+  lobWarn('');
   $('coErr').textContent = '';
   coopWire();
   lobShow('room');
   lobStatus('방을 여는 중');
+  NET.meta = platTag();
   netHost();
 }
 function coopJoin(code) {
   SFX.initAudio();
   if (coop.on) coopEnd();
   Object.assign(coop, { on: true, host: false, started: false, pid: -1, roster: [], info: [], lost: '', cfg: cfgFrom(null) });
+  lobWarn('');
   $('coErr').textContent = '';
   coopWire();
   if (game.state !== 'coop') { for (const e of enemies) e.remove(); enemies.length = 0; clearSquad(); setState('coop'); }
+  NET.meta = platTag();
   netJoin(code);
   lob.joinT = performance.now();
   lobShow('room');
@@ -3137,7 +3190,7 @@ $('btnCoBack').addEventListener('click', () => setState('menu'));
 $('btnCoPadBack').addEventListener('click', () => lobShow('choose'));
 $('btnCoGo').addEventListener('click', () => { if (lob.entry.length === 5) coopJoin(lob.entry); });
 $('btnCoStart').addEventListener('click', coopHostStart);
-$('btnCoMode').addEventListener('click', () => { if (!coop.host) return; coop.cfg.mode = MODES[(MODES.indexOf(coop.cfg.mode) + 1) % MODES.length]; coopRoster(); });
+$('btnCoMode').addEventListener('click', () => { if (!coop.host) return; coop.cfg.mode = MODES[(MODES.indexOf(coop.cfg.mode) + 1) % MODES.length]; lob.warn = ''; $('coWarn').classList.add('hidden'); coopRoster(); }); // 모드를 바꾸면 그 모드의 설명을 다시 보여 준다
 $('btnCoMis').addEventListener('click', () => { if (!coop.host) return; coop.cfg.mi = (coop.cfg.mi + 1) % MISSIONS.length; coopRoster(); });
 $('btnCoTeam').addEventListener('click', () => { // 내 팀 바꾸기: 방장은 바로, 참가자는 방장에게 알린다
   if (coop.host) { coop.cfg.tm[0] = coop.cfg.tm[0] ? 0 : 1; coopRoster(); }
@@ -4516,4 +4569,4 @@ setState('menu');
 requestAnimationFrame(frame);
 
 // 자동 검증용 훅
-window.__yz = { step: (n, dt) => { for (let i = 0; i < n && live(); i++) update(dt); }, hit, TORCH_I, bloom, lampL, torch, flashLight, MAPS, QUAL, cycleQuality, glare, sunDir, vmCam, bossOf, bossArmor, bossWave, bossTier, bossBarrage, bossSpawn, barrage, barrageApply, barrageClear, startWave, rayEnemy, updateWaves, coop, NET, isPvp, isTeam, isMis, teamOf, mate, teamKills, MISSIONS, mis, updateMission, misEnd, envOf: () => envName, shareUrl, pvpTable, coopToLobby, pauseGame, resumeGame, netFailText, addPickup, findPath, cellNear, humans, coopHost, coopJoin, coopHostStart, coopEnd, lob, RemotePlayer, chestY, camp, allies, overwatch, EPISODES, SQUAD, startEpisode, squadJoin, squadLeave, squadHold, squadFollow, setOverwatch, openEpisodes, quitToMenu, radioQ, store, loadMap, applyEnv, ENVS, WORLD, B, START, rayWorld, losClear, blockedAt, prog, openSupply, pickSupply, applySupply, SFX, WH, dust, sparks, TYPES, gren, throwGrenade, explode, ORDER, MOCAP, aa, VM, scene, colliders, toggleRot, game, player, enemies, input, vm, W, opt, dbg, renderer, camera, pickups, spawnEnemy, startGame, hurtPlayer, switchWeapon, startReload, applyQuality, NAV };
+window.__yz = { step: (n, dt) => { for (let i = 0; i < n && live(); i++) update(dt); }, EASE, plat, platRead, platTag, lanHelp, lobWarn, hit, TORCH_I, bloom, lampL, torch, flashLight, MAPS, QUAL, cycleQuality, glare, sunDir, vmCam, bossOf, bossArmor, bossWave, bossTier, bossBarrage, bossSpawn, barrage, barrageApply, barrageClear, startWave, rayEnemy, updateWaves, coop, NET, isPvp, isTeam, isMis, teamOf, mate, teamKills, MISSIONS, mis, updateMission, misEnd, envOf: () => envName, shareUrl, pvpTable, coopToLobby, pauseGame, resumeGame, netFailText, addPickup, findPath, cellNear, humans, coopHost, coopJoin, coopHostStart, coopEnd, lob, RemotePlayer, chestY, camp, allies, overwatch, EPISODES, SQUAD, startEpisode, squadJoin, squadLeave, squadHold, squadFollow, setOverwatch, openEpisodes, quitToMenu, radioQ, store, loadMap, applyEnv, ENVS, WORLD, B, START, rayWorld, losClear, blockedAt, prog, openSupply, pickSupply, applySupply, SFX, WH, dust, sparks, TYPES, gren, throwGrenade, explode, ORDER, MOCAP, aa, VM, scene, colliders, toggleRot, game, player, enemies, input, vm, W, opt, dbg, renderer, camera, pickups, spawnEnemy, startGame, hurtPlayer, switchWeapon, startReload, applyQuality, NAV };

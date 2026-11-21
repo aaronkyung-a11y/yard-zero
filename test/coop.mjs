@@ -101,10 +101,16 @@ try {
   // 6. 적 동기화: 방장이 만든 적이 참가자 화면에도 같은 자리에
   await run(12, async () => (await A.evaluate(() => window.__yz.enemies.filter((e) => !e.dead).length)) >= 3);
   await run(1);
-  const enA = await A.evaluate(() => window.__yz.enemies.filter((e) => !e.dead).map((e) => [e.nid, e.T.key, +e.pos.x.toFixed(1), +e.pos.z.toFixed(1)]));
-  const enB = await B.evaluate(() => window.__yz.enemies.filter((e) => !e.dead).map((e) => [e.nid, e.T.key, +e.pos.x.toFixed(1), +e.pos.z.toFixed(1), e.puppet]));
-  let maxErr = 0;
-  for (const a of enA) { const b = enB.find((q) => q[0] === a[0]); maxErr = Math.max(maxErr, b ? Math.hypot(a[2] - b[2], a[3] - b[3]) : 99); }
+  // 두 화면을 차례로 읽는 사이에 방장 쪽에서 적이 새로 나오면 수가 어긋나 보인다(읽는 순서 때문이지 동기화 문제가 아니다). 어긋나면 조금 더 돌리고 다시 읽는다(최대 5번)
+  let enA, enB, maxErr = 0;
+  for (let k = 0; k < 5; k++) {
+    enA = await A.evaluate(() => window.__yz.enemies.filter((e) => !e.dead).map((e) => [e.nid, e.T.key, +e.pos.x.toFixed(1), +e.pos.z.toFixed(1)]));
+    enB = await B.evaluate(() => window.__yz.enemies.filter((e) => !e.dead).map((e) => [e.nid, e.T.key, +e.pos.x.toFixed(1), +e.pos.z.toFixed(1), e.puppet]));
+    maxErr = 0;
+    for (const a of enA) { const b = enB.find((q) => q[0] === a[0]); maxErr = Math.max(maxErr, b ? Math.hypot(a[2] - b[2], a[3] - b[3]) : 99); }
+    if (enA.length === enB.length && maxErr < 99) break;
+    await run(0.5);
+  }
   out.enemies = { host: enA.length, guest: enB.length, maxPosErr: +maxErr.toFixed(2), wave: (await st(B)).wave, puppets: enB.every((q) => q[4]) };
   check('enemy count', enA.length >= 3 && enA.length === enB.length, out.enemies);
   check('enemy positions', maxErr < 2.5, out.enemies);
@@ -125,7 +131,7 @@ try {
   await run(1);
   const hp1 = (await st(B)).hp;
   out.hurt = { before: hp0, after: hp1 };
-  check('hurt relayed', hp0 - hp1 >= 29 && hp0 - hp1 <= 31, out.hurt);
+  check('hurt relayed', hp0 - hp1 >= 27 && hp0 - hp1 <= 28.5, out.hurt); // v0.11.1: 적에게 받는 피해 ×0.92 → 30은 27.6
 
   // 9. 적이 스스로 참가자를 공격한다: B를 적 가까이 세워 두고 방장 AI에 맡긴다
   const tgt = await A.evaluate(() => { const e = window.__yz.enemies.find((q) => !q.dead); return [e.pos.x, e.pos.z]; });

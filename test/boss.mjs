@@ -64,7 +64,7 @@ out.armor = await ev(() => {
 console.log('armor', JSON.stringify(out.armor));
 { const a = out.armor;
   check('종류 추가(끝에 붙어야 기존 번호가 안 바뀐다)', a.keys && a.keys.join() === 'rifle,rusher,heavy,sniper,jugg,bomb', a.keys);
-  check('철갑 체력·크기', a.hpMax === 3600 && a.hs === 1.3 && a.boss, a);
+  check('철갑 체력·크기', a.hpMax === 3350 && a.hs === 1.3 && a.boss, a);
   check('방탄 배율 정면 0.2 / 옆 0.6 / 뒤 1 / 폭발 1', a.kFront === 0.2 && a.kSide === 0.6 && a.kBack === 1 && a.kBlast === 1, a);
   check('피해 100 → 정면 20 / 옆 60 / 뒤 100 / 장전 중 125', a.dFront === 20 && a.dSide === 60 && a.dBack === 100 && a.dFrontReload === 125, a);
   check('피격 판정 크기: 2.15m 높이가 철갑 머리에 맞고 보통 병사는 빗나간다', a.rayBoss > 11 && a.partBoss === 2 && a.rayRifle === -1, a); }
@@ -211,8 +211,9 @@ out.shell = await ev(() => {
 });
 console.log('shell', JSON.stringify(out.shell));
 { const a = out.shell;
-  check('포격 피해: 중심 75 / 절반 60.9 / 가장자리 안 21.4 / 밖 0', a.c[1] === 75 && Math.abs(a.half[1] - 60.9) < 0.2 && Math.abs(a.edge[1] - 21.4) < 0.3 && a.outside[1] === 0 && a.c[2] === 0, a);
-  check('방탄판 2단계면 30% 덜 받는다', Math.abs(a.armor2[1] - 52.5) < 0.1, a.armor2);
+  // v0.11.1부터 받는 피해에 0.92를 곱한다: 75 → 69, 60.9 → 56.0, 21.4 → 19.7
+  check('포격 피해(× 0.92): 중심 69 / 절반 56.0 / 가장자리 안 19.7 / 밖 0', a.c[1] === 69 && Math.abs(a.half[1] - 56.0) < 0.2 && Math.abs(a.edge[1] - 19.7) < 0.3 && a.outside[1] === 0 && a.c[2] === 0, a);
+  check('방탄판 2단계면 30% 덜 받는다(69 × 0.7 = 48.3)', Math.abs(a.armor2[1] - 48.3) < 0.1, a.armor2);
   check('받은 값은 범위 안으로 자른다(반경 8, 피해 120, 4초, 한 번에 16곳)', a.clamp.r === 8 && a.clamp.dmg === 120 && a.clamp.fuse === 4 && a.cap === 16, a); }
 
 // ── H2: 화약고 — 멈춰 서서 무전(1.3초, 방탄 풀림) 뒤 포격. 무늬: 셋(3) / 줄(5) / 둘레(6, 마지막 단계는 +가운데) / 뒤쫓기(한 발씩 4번)
@@ -261,17 +262,17 @@ out.bomb = await ev(() => {
 });
 console.log('bomb', JSON.stringify({ ...out.bomb, calls: undefined }), '\n  calls', out.bomb.calls.length, JSON.stringify(out.bomb.calls.slice(0, 4)), '…');
 { const a = out.bomb, cs = a.calls, of = (k, ph) => cs.filter((q) => q.k === k && (ph === undefined || q.ph === ph));
-  check('화약고 체력·크기·방탄', a.hpMax === 2800 && a.hs === 1.18 && a.kFront === 0.55 && a.kBack === 1, a);
+  check('화약고 체력·크기·방탄', a.hpMax === 2600 && a.hs === 1.18 && a.kFront === 0.55 && a.kBack === 1, a);
   check('1단계 무늬: 셋 / 줄만', of('triple', 0).length > 0 && of('line', 0).length > 0 && !cs.some((q) => q.ph === 0 && q.k !== 'triple' && q.k !== 'line'), a.pats);
   check('2단계 무늬: 셋 / 줄 / 둘레', of('ring', 1).length > 0 && !cs.some((q) => q.ph === 1 && !['triple', 'line', 'ring'].includes(q.k)), a.pats);
   check('3단계 무늬: 둘레(뒤이어 한 발) / 줄 / 뒤쫓기', of('ring', 2).length > 0 && of('chase', 2).length > 0 && of('ring', 2).every((q) => q.cnt === 6) && !cs.some((q) => q.ph === 2 && !['ring', 'line', 'chase', 'follow'].includes(q.k)), a.pats);
   { const main = cs.filter((q) => q.k !== 'follow'); check('같은 무늬를 연달아 쓰지 않는다', main.every((q, i) => i === 0 || q.ph !== main[i - 1].ph || q.k !== main[i - 1].k), main.map((q) => q.k + q.ph).join(' ')); }
   check('무전 1.3초 동안 멈춰 서고 방탄이 풀린다', cs.filter((q) => q.call).length > 5 && cs.filter((q) => q.call).every((q) => Math.abs(q.call - 1.3) < 0.11 && q.exp && q.kF === 1.25 && q.spd < 0.6), cs.filter((q) => q.call).slice(0, 3));
   check('떨어지기까지: 1.5초, 단계마다 0.12초씩 짧아진다', of('triple', 0).every((q) => q.fuse === 1.5) && of('ring', 1).every((q) => q.fuse === 1.38) && of('ring', 2).every((q) => q.fuse === 1.26), cs.map((q) => q.fuse));
-  check('셋·줄: 제자리에 서 있으면 한가운데 한 발만 맞는다(75)', [...of('triple'), ...of('line')].every((q) => q.hit === 75), [...of('triple'), ...of('line')].map((q) => q.hit));
+  check('셋·줄: 제자리에 서 있으면 한가운데 한 발만 맞는다(75 × 0.92 = 69)', [...of('triple'), ...of('line')].every((q) => q.hit === 69), [...of('triple'), ...of('line')].map((q) => q.hit));
   check('둘레(2단계): 가운데에 그대로 있으면 안 맞는다', of('ring', 1).every((q) => q.hit === 0 && q.dist[0] > 6), of('ring', 1).map((q) => [q.hit, q.dist[0]]));
-  check('둘레(3단계): 둘레가 터진 뒤 서 있는 자리에 한 발 더(피해 53)', of('ring', 2).every((q) => { const nx = cs[cs.indexOf(q) + 1]; return q.hit === 0 && nx && nx.k === 'follow' && nx.hit === 53; }), cs.filter((q) => q.ph === 2).map((q) => [q.k, q.n, q.hit]));
-  check('뒤쫓기: 한 발씩 4번(서 있으면 53씩 네 번)', of('chase').length > 0 && of('chase').every((q) => q.n === 4 && q.hit === 212), of('chase').map((q) => [q.n, q.hit])); }
+  check('둘레(3단계): 둘레가 터진 뒤 서 있는 자리에 한 발 더(피해 53 × 0.92 = 48.8)', of('ring', 2).every((q) => { const nx = cs[cs.indexOf(q) + 1]; return q.hit === 0 && nx && nx.k === 'follow' && nx.hit === 49; }), cs.filter((q) => q.ph === 2).map((q) => [q.k, q.n, q.hit]));
+  check('뒤쫓기: 한 발씩 4번(서 있으면 48.8씩 네 번, 반올림해 더한 값 196)', of('chase').length > 0 && of('chase').every((q) => q.n === 4 && q.hit === 196), of('chase').map((q) => [q.n, q.hit])); }
 
 // ── 원 안에 서 있을 때의 경고
 out.warn = await ev(() => {
@@ -342,6 +343,8 @@ out.wave = await ev(() => {
     if (d < 20 || b.state === 'combat') { tIn = +(i * 0.05).toFixed(1); break; }
   }
   r.approach = { far: +far.toFixed(2), near: +near.toFixed(2), contactAfter: tIn, dist: +Math.hypot(b.pos.x - p.pos.x, b.pos.z - p.pos.z).toFixed(1), alive: y.enemies.filter((e) => !e.dead).length };
+  // 나온 자리에서 곧바로 플레이어가 보이면 다가오지 않고 그 자리에서 교전을 시작한다(나오는 자리는 무작위다). 이때는 다가오는 속도를 잴 수 없다
+  r.approach.engagedAtSpawn = tIn >= 0 && tIn < 1 && r.approach.dist > 30;
   // 전부 쓰러뜨린다
   const killAll = () => { for (const e of y.enemies) if (!e.dead) e.damage(1e6, 1, { x: Math.sin(e.aimYaw), y: 0, z: Math.cos(e.aimYaw) }, 3); };
   const pk0 = y.pickups.length;
@@ -367,11 +370,12 @@ console.log('wave', JSON.stringify(out.wave));
 { const a = out.wave;
   check('웨이브 표: 5 철갑 / 10 화약고 / 15 철갑 / 20 화약고 / 25부터 둘 다', JSON.stringify(a.table) === JSON.stringify([[1, null], [4, null], [5, ['jugg']], [10, ['bomb']], [15, ['jugg']], [20, ['bomb']], [25, ['jugg', 'bomb']], [30, ['jugg', 'bomb']]]), a.table);
   check('5웨이브 시작: 지휘관 먼저 + 호위 3', !a.err && a.start.wave === 5 && a.start.q[0] === 'jugg' && a.start.q.length === 4 && a.start.toSpawn === 4 && a.start.msgT === '지휘관 철갑' && /중장갑 지휘관/.test(a.start.msgS), a.start);
-  check('지휘관은 24m 넘게 떨어져 나타난다', a.spawn && a.spawn.type === 'jugg' && a.spawn.dist >= 24 && a.spawn.dist < 60 && a.spawn.hpMax === 3600, a.spawn);
-  check('멀리서는 뛰어온다(약 4m/s), 가까이서는 걷는다', a.approach.far > 3.2 && (a.approach.near === 0 || a.approach.near < 2.9) && a.approach.contactAfter > 0 && a.approach.contactAfter < 25, a.approach);
+  check('지휘관은 24m 넘게 떨어져 나타난다', a.spawn && a.spawn.type === 'jugg' && a.spawn.dist >= 24 && a.spawn.dist < 60 && a.spawn.hpMax === 3350, a.spawn);
+  if (a.approach.engagedAtSpawn) console.log('NOTE 지휘관이 나오자마자 교전을 시작해 다가오는 속도는 이번 실행에서 재지 못했다(다시 실행할 것)', JSON.stringify(a.approach));
+  else check('멀리서는 뛰어온다(약 4m/s), 가까이서는 걷는다', a.approach.far > 3.2 && (a.approach.near === 0 || a.approach.near < 2.9) && a.approach.contactAfter > 0 && a.approach.contactAfter < 25, a.approach);
   check('지휘관 제거: 알림, 보급품 4개, 점수 2000', a.kill.msgT === '철갑 제거' && a.kill.drops.join() === 'ammo,ammo,med,med' && a.kill.score === 2000, a.kill);
   check('웨이브 격퇴: 보너스 두 배(2500), 막대 사라짐, 보급 선택', a.clear.msgT === '구역 확보' && /\+2500/.test(a.clear.msgS) && !a.clear.bar && a.supply === 'supply', a.clear);
-  check('15웨이브 1.4배(5040) / 25웨이브 1.8배(화약고 5040)', a.tier15[0] === 1 && a.tier15[1] === 5040 && a.tier25[0] === 2 && a.tier25[1] === 5040, [a.tier15, a.tier25]); }
+  check('15웨이브 1.4배(철갑 4690) / 25웨이브 1.8배(화약고 4680)', a.tier15[0] === 1 && a.tier15[1] === 4690 && a.tier25[0] === 2 && a.tier25[1] === 4680, [a.tier15, a.tier25]); }
 
 // ── K: 작전 5 "지휘관 사냥" — 처음부터 열려 있다. 철갑 → 보급 → 화약고 → 완료. 다른 작전의 진행은 건드리지 않는다
 out.ep = await ev(async () => {

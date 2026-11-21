@@ -22,7 +22,7 @@ try {
   await ev(() => { const y = window.__yz; y.game.between = 9999; }); // 적 없이
   // 1. 자동 회복 없음 (예전: 4.5초 뒤부터 초당 10)
   out.regen = await ev(() => { const y = window.__yz; y.hurtPlayer(30, { x: 0, z: 0 }); const a = y.player.hp; y.step(600, 1 / 60); return { after: a, later: y.player.hp, state: y.game.state }; });
-  check('no regen', out.regen.after === 70 && out.regen.later === 70, out.regen);
+  check('no regen', out.regen.after === 72.4 && out.regen.later === 72.4, out.regen); // 30 × 0.92 = 27.6을 잃는다(v0.11.1부터 받는 피해에 0.92를 곱한다)
   // 2. 의무 보급품은 +50
   out.med = await ev(() => { const y = window.__yz; y.player.hp = 40; y.addPickup('med', y.player.pos.x, y.player.pos.z); y.step(5, 1 / 60); return { hp: y.player.hp, left: y.pickups.length }; });
   check('medkit +50', out.med.hp === 90 && out.med.left === 0, out.med);

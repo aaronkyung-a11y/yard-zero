@@ -85,7 +85,7 @@ try {
   let a = await boss(A), b = await boss(B), ha = await hud(A), hb = await hud(B);
   out.wave5 = { A: a, B: b, hudA: { msgT: ha.msgT, wave: ha.wave, enemy: ha.enemy }, hudB: { msgT: hb.msgT, msgS: hb.msgS, wave: hb.wave, enemy: hb.enemy, feed: hb.feed } };
   check('wave 5 boss on both', a && b && a.key === 'jugg' && b.key === 'jugg' && !a.puppet && b.puppet && a.nid === b.nid, out.wave5);
-  check('boss hp scales with players (3600 × 1.9)', a && a.hpMax === 6840, a && a.hpMax);
+  check('boss hp scales with players (3350 × 1.9)', a && a.hpMax === 6365, a && a.hpMax);
   check('guest banner + bar', hb.msgT === '지휘관 철갑' && /중장갑 지휘관/.test(hb.msgS) && b.hud.shown && b.hud.n === '지휘관 철갑' && b.hud.fill > 0.99 && hb.wave === 'WAVE 5' && hb.feed.some((t) => /등장/.test(t)), out.wave5.hudB);
   check('guest sees boss position and facing', a && b && Math.hypot(a.pos[0] - b.pos[0], a.pos[1] - b.pos[1]) < 1 && Math.abs(a.yaw - b.yaw) < 0.2 && b.kFront === 0.2 && b.kBack === 1, { a: a && a.pos, b: b && b.pos, ya: a && a.yaw, yb: b && b.yaw });
 
@@ -166,7 +166,7 @@ try {
   check('rings synced', ha.rings.length === 2 && JSON.stringify(ha.rings) === JSON.stringify(hb.rings) && Math.hypot(ha.rings[0][0] - base.x, ha.rings[0][1] - base.z) < 0.2 && ha.rings[0][2] === 3.4 && ha.rings[0][3] === 60, out.rings);
   await runPinned(2.2);
   out.ringDmg = { A: Math.round(hpA0 - (await A.evaluate(() => window.__yz.player.hp))), B: Math.round(hpB0 - (await B.evaluate(() => window.__yz.player.hp))), left: [(await hud(A)).rings.length, (await hud(B)).rings.length] };
-  check('shell hurts only the one standing in it (host)', out.ringDmg.A === 60 && out.ringDmg.B === 0 && out.ringDmg.left.join() === '0,0', out.ringDmg);
+  check('shell hurts only the one standing in it (host): 60 × 0.92', out.ringDmg.A === 55 && out.ringDmg.B === 0 && out.ringDmg.left.join() === '0,0', out.ringDmg);
   // 반대로: 참가자가 원 안, 방장은 밖
   await god(A); await god(B);
   await tp(A, base.x + 30, base.z); await tp(B, base.x, base.z);
@@ -228,7 +228,7 @@ try {
   await pin(); await runPinned(1);
   a = await boss(A); b = await boss(B); ha = await hud(A); hb = await hud(B);
   out.m4s0 = { A: { map: ha.map, env: ha.env, wave: ha.wave, obj: ha.obj, sub: ha.sub, hpMax: a && a.hpMax, low: a && a.hud.low }, B: { map: hb.map, env: hb.env, wave: hb.wave, obj: hb.obj, sub: hb.sub, key: b && b.key, mk: hb.mk, low: b && b.hud.low }, banner: out.m4banner };
-  check('m4 stage 1: jugg on both', ha.map === 'depot' && hb.map === 'depot' && ha.env === 'dawn' && hb.env === 'dawn' && ha.wave === '임무 4 · 1/2' && hb.wave === '임무 4 · 1/2' && /철갑/.test(hb.obj) && /체력 100%/.test(hb.sub) && a && a.hpMax === 6840 && b && b.key === 'jugg' && hb.mk && b.hud.low && out.m4banner.msgT === '지휘관 철갑', out.m4s0);
+  check('m4 stage 1: jugg on both', ha.map === 'depot' && hb.map === 'depot' && ha.env === 'dawn' && hb.env === 'dawn' && ha.wave === '임무 4 · 1/2' && hb.wave === '임무 4 · 1/2' && /철갑/.test(hb.obj) && /체력 100%/.test(hb.sub) && a && a.hpMax === 6365 && b && b.key === 'jugg' && hb.mk && b.hud.low && out.m4banner.msgT === '지휘관 철갑', out.m4s0);
   await A.evaluate(() => { const y = window.__yz, e = y.bossOf(); e.damage(1e6, 1, { x: Math.sin(e.aimYaw), y: 0, z: Math.cos(e.aimYaw) }, 3); });
   out.m4sup = await pickBoth();
   check('m4: supply after first boss', out.m4sup.join() === 'supply,supply', out.m4sup);
@@ -236,7 +236,7 @@ try {
   await pin(); await runPinned(1);
   a = await boss(A); b = await boss(B); hb = await hud(B);
   out.m4s1 = { A: a && { key: a.key, hpMax: a.hpMax }, B: b && { key: b.key, n: b.hud.n, kFront: b.kFront }, hudB: { wave: hb.wave, obj: hb.obj, si: hb.si } };
-  check('m4 stage 2: bomb on both (2800 × 1.9)', a && a.key === 'bomb' && a.hpMax === 5320 && b && b.hud.n === '지휘관 화약고' && b.kFront === 0.55 && hb.wave === '임무 4 · 2/2' && /화약고/.test(hb.obj), out.m4s1);
+  check('m4 stage 2: bomb on both (2600 × 1.9)', a && a.key === 'bomb' && a.hpMax === 4940 && b && b.hud.n === '지휘관 화약고' && b.kFront === 0.55 && hb.wave === '임무 4 · 2/2' && /화약고/.test(hb.obj), out.m4s1);
   // 화약고 2단계: 표적 말고 다른 한 사람에게도 한 발
   await god(A); await god(B);
   const pa = await A.evaluate(() => { const p = window.__yz.player.pos; return [p.x, p.z]; }), pb = await B.evaluate(() => { const p = window.__yz.player.pos; return [p.x, p.z]; });

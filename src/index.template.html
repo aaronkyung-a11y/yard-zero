@@ -206,7 +206,7 @@ body.portrait .cards.eplist{grid-template-columns:repeat(2,minmax(0,1fr))}
 .card.locked{opacity:.38;cursor:default}
 #eps,#epdone,#coop{background:linear-gradient(180deg,rgba(9,11,12,.88) 0%,rgba(9,11,12,.76) 100%)}
 .cocode{margin:6px 0 0;font:700 clamp(40px,13vmin,84px)/1 var(--body);letter-spacing:.14em;color:var(--amber);font-variant-numeric:tabular-nums}
-#coErr{margin:10px 0 0;font:500 clamp(13px,3.4vmin,16px)/1.4 var(--body);color:#ff8a70;max-width:38ch}
+#coErr{margin:10px 0 0;font:500 clamp(13px,3.4vmin,16px)/1.4 var(--body);color:#ff8a70;max-width:38ch;white-space:pre-line}
 #coErr:empty{display:none}
 #coStatus{margin-top:10px;max-width:38ch;line-height:1.4}
 #coKeys{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;max-width:300px}
@@ -218,7 +218,12 @@ body.portrait .cards.eplist{grid-template-columns:repeat(2,minmax(0,1fr))}
 #menu .tag{margin-top:10px}
 #coCfg{margin-top:12px}
 #coCfg .ghost:disabled{border-style:dashed;cursor:default;color:var(--dim)}
-#coErr,#coStatus{max-width:46ch}
+#coErr,#coStatus{max-width:none}
+#coWarn{margin:0;font:500 clamp(13px,3.4vmin,16px)/1.4 var(--body);color:#ff8a70;white-space:pre-line}
+/* 연결 실패 안내는 글이 길다. 버튼이 화면 밖으로 밀리지 않도록 그동안 큰 제목을 접는다 */
+#coop:has(#coErr:not(:empty)) h2,#coop:has(#coErr:not(:empty)) #coPad>.best{display:none}
+#coop:has(#coErr:not(:empty)) #coPad .cocode{font-size:clamp(34px,10vmin,64px)}
+#coop:has(#coErr:not(:empty)) #coPad .row{margin-top:12px}
 .corow{display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid var(--line);font:500 clamp(14px,3.8vmin,18px)/1.2 var(--body)}
 .corow b{color:#8fd6ff;font-weight:700}
 .corow span{color:var(--dim);font-variant-numeric:tabular-nums}
@@ -406,6 +411,7 @@ body.portrait .overlay{background:linear-gradient(180deg,rgba(9,11,12,.9) 0%,rgb
       </div>
       <div id="coSide" class="hidden"><div id="coList"></div></div>
       <div id="coHelp" style="margin-top:14px">
+        <p id="coWarn" class="hidden"></p>
         <dl id="coHelpS">
           <dt>적</dt><dd>방을 만든 폰이 계산. 그 폰의 화면이 꺼지면 모두 멈춤</dd>
           <dt>적의 수</dt><dd>사람이 늘수록 많아짐</dd>
